@@ -1,0 +1,630 @@
+"""SQLAlchemy models for Phase 0–2."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+from typing import Any
+
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+
+def _uuid() -> uuid.UUID:
+    return uuid.uuid4()
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Tenant(Base):
+    __tablename__ = "tenants"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    slug: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    api_keys: Mapped[list[ApiKey]] = relationship(back_populates="tenant")
+    cases: Mapped[list[Case]] = relationship(back_populates="tenant")
+
+
+class ApiKey(Base):
+    __tablename__ = "api_keys"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(128), nullable=False, default="default")
+    key_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    key_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    tenant: Mapped[Tenant] = relationship(back_populates="api_keys")
+
+    __table_args__ = (Index("ix_api_keys_tenant_id", "tenant_id"),)
+
+
+class Case(Base):
+    __tablename__ = "cases"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(64), default="open", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    tenant: Mapped[Tenant] = relationship(back_populates="cases")
+    members: Mapped[list[CaseMember]] = relationship(back_populates="case")
+    case_documents: Mapped[list[CaseDocument]] = relationship(back_populates="case")
+
+    __table_args__ = (Index("ix_cases_tenant_id", "tenant_id"),)
+
+
+class CaseMember(Base):
+    __tablename__ = "case_members"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    role: Mapped[str] = mapped_column(String(64), default="owner", nullable=False)
+    label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    case: Mapped[Case] = relationship(back_populates="members")
+
+    __table_args__ = (Index("ix_case_members_case_id", "case_id"),)
+
+
+class Document(Base):
+    __tablename__ = "documents"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(128), nullable=False, default="application/octet-stream")
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    storage_uri: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    source_filename: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    processing_version: Mapped[str] = mapped_column(String(32), default="1.0", nullable=False)
+    upload_status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    case_documents: Mapped[list[CaseDocument]] = relationship(back_populates="document")
+    pages: Mapped[list[DocumentPage]] = relationship(back_populates="document")
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "content_hash", name="uq_documents_tenant_hash"),
+        Index("ix_documents_tenant_id", "tenant_id"),
+        Index("ix_documents_content_hash", "content_hash"),
+    )
+
+
+class CaseDocument(Base):
+    __tablename__ = "case_documents"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    role: Mapped[str] = mapped_column(String(32), default="supporting", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    case: Mapped[Case] = relationship(back_populates="case_documents")
+    document: Mapped[Document] = relationship(back_populates="case_documents")
+
+    __table_args__ = (
+        UniqueConstraint("case_id", "document_id", name="uq_case_documents"),
+        Index("ix_case_documents_case_id", "case_id"),
+    )
+
+
+class ProcessingJob(Base):
+    __tablename__ = "processing_jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(32), default="queued", nullable=False)
+    processing_version: Mapped[str] = mapped_column(String(32), default="1.0", nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    stage_runs: Mapped[list[ProcessingStageRun]] = relationship(back_populates="job")
+
+    __table_args__ = (
+        Index("ix_processing_jobs_tenant_id", "tenant_id"),
+        Index("ix_processing_jobs_document_id", "document_id"),
+    )
+
+
+class ProcessingStageRun(Base):
+    __tablename__ = "processing_stage_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("processing_jobs.id", ondelete="CASCADE"), nullable=False
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    document_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    stage_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    stage_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    model_version: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(32), default="queued", nullable=False)
+    skipped: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    job: Mapped[ProcessingJob] = relationship(back_populates="stage_runs")
+
+    __table_args__ = (
+        # Succeeded runs are unique via partial index uq_stage_idempotency_succeeded
+        Index("ix_stage_runs_job_id", "job_id"),
+    )
+
+
+class AuditEvent(Base):
+    __tablename__ = "audit_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    case_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    actor: Mapped[str] = mapped_column(String(128), default="system", nullable=False)
+    action: Mapped[str] = mapped_column(String(128), nullable=False)
+    resource_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    resource_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (Index("ix_audit_events_tenant_id", "tenant_id"),)
+
+
+class PromptVersion(Base):
+    __tablename__ = "prompt_versions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    prompt_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    version: Mapped[str] = mapped_column(String(32), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    schema_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("prompt_id", "version", name="uq_prompt_versions"),
+    )
+
+
+# --- Phase 1 ---
+
+
+class DocumentPage(Base):
+    __tablename__ = "document_pages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    page_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    image_storage_uri: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    has_text_layer: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    quality_label: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    ocr_route: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    document: Mapped[Document] = relationship(back_populates="pages")
+    extractions: Mapped[list[PageExtraction]] = relationship(back_populates="page")
+
+    __table_args__ = (
+        UniqueConstraint("document_id", "page_number", name="uq_document_pages"),
+        Index("ix_document_pages_document_id", "document_id"),
+    )
+
+
+class DocumentIntegrityCheck(Base):
+    __tablename__ = "document_integrity_checks"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    check_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (Index("ix_integrity_document_id", "document_id"),)
+
+
+class PageExtraction(Base):
+    __tablename__ = "page_extractions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    page_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("document_pages.id", ondelete="CASCADE"), nullable=False
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    extraction_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    model_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    extraction_version: Mapped[str] = mapped_column(String(32), default="1.0", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    page: Mapped[DocumentPage] = relationship(back_populates="extractions")
+
+    __table_args__ = (Index("ix_page_extractions_page_id", "page_id"),)
+
+
+class ModelRun(Base):
+    __tablename__ = "model_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    case_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    stage: Mapped[str] = mapped_column(String(64), nullable=False)
+    prompt_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    temperature: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    schema_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (Index("ix_model_runs_tenant_id", "tenant_id"),)
+
+
+class EvidenceItem(Base):
+    __tablename__ = "evidence_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    evidence_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
+    )
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    page_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_text: Mapped[str] = mapped_column(Text, nullable=False)
+    bbox: Mapped[list[Any] | None] = mapped_column(JSONB, nullable=True)
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    ocr_provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    ocr_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    extraction_version: Mapped[str] = mapped_column(String(32), default="1.0", nullable=False)
+    model_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("model_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_evidence_items_document_id", "document_id"),
+        Index("ix_evidence_items_case_id", "case_id"),
+    )
+
+
+class DocumentClassification(Base):
+    __tablename__ = "document_classifications"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    doc_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    model_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (Index("ix_document_classifications_document_id", "document_id"),)
+
+
+# --- Phase 2 ---
+
+
+class Person(Base):
+    __tablename__ = "persons"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    display_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    aliases: Mapped[list[PersonAlias]] = relationship(back_populates="person")
+    identifiers: Mapped[list[PersonIdentifier]] = relationship(back_populates="person")
+
+    __table_args__ = (
+        Index("ix_persons_case_id", "case_id"),
+        Index("ix_persons_normalized_name", "case_id", "normalized_name"),
+    )
+
+
+class PersonAlias(Base):
+    __tablename__ = "person_aliases"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    person_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("persons.id", ondelete="CASCADE"), nullable=False
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    alias: Mapped[str] = mapped_column(String(512), nullable=False)
+    normalized_alias: Mapped[str] = mapped_column(String(512), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), default="extraction", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    person: Mapped[Person] = relationship(back_populates="aliases")
+
+    __table_args__ = (Index("ix_person_aliases_person_id", "person_id"),)
+
+
+class PersonIdentifier(Base):
+    __tablename__ = "person_identifiers"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    person_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("persons.id", ondelete="CASCADE"), nullable=False
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    id_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    id_value: Mapped[str] = mapped_column(String(255), nullable=False)
+    normalized_value: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    person: Mapped[Person] = relationship(back_populates="identifiers")
+
+    __table_args__ = (
+        Index("ix_person_identifiers_person_id", "person_id"),
+        UniqueConstraint("person_id", "id_type", "normalized_value", name="uq_person_identifier"),
+    )
+
+
+class Parcel(Base):
+    __tablename__ = "parcels"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    display_label: Mapped[str] = mapped_column(String(512), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    identifiers: Mapped[list[ParcelIdentifier]] = relationship(back_populates="parcel")
+
+    __table_args__ = (Index("ix_parcels_case_id", "case_id"),)
+
+
+class ParcelIdentifier(Base):
+    __tablename__ = "parcel_identifiers"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    parcel_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("parcels.id", ondelete="CASCADE"), nullable=False
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    id_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    id_value: Mapped[str] = mapped_column(String(255), nullable=False)
+    normalized_value: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    parcel: Mapped[Parcel] = relationship(back_populates="identifiers")
+
+    __table_args__ = (
+        Index("ix_parcel_identifiers_parcel_id", "parcel_id"),
+        Index("ix_parcel_identifiers_normalized", "normalized_value"),
+        UniqueConstraint("parcel_id", "id_type", "normalized_value", name="uq_parcel_identifier"),
+    )
+
+
+class OwnershipEvent(Base):
+    __tablename__ = "ownership_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True
+    )
+    parcel_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("parcels.id", ondelete="SET NULL"), nullable=True
+    )
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    event_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    event_date_raw: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    registration_number: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    consideration_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    consideration_currency: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    verification_state: Mapped[str] = mapped_column(String(32), default="EXTRACTED", nullable=False)
+    model_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    parties: Mapped[list[OwnershipEventParty]] = relationship(back_populates="ownership_event")
+    shares: Mapped[list[OwnershipShare]] = relationship(back_populates="ownership_event")
+
+    __table_args__ = (
+        Index("ix_ownership_events_case_id", "case_id"),
+        Index("ix_ownership_events_document_id", "document_id"),
+    )
+
+
+class OwnershipEventParty(Base):
+    __tablename__ = "ownership_event_parties"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    ownership_event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ownership_events.id", ondelete="CASCADE"), nullable=False
+    )
+    person_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("persons.id", ondelete="CASCADE"), nullable=False
+    )
+    role: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    ownership_event: Mapped[OwnershipEvent] = relationship(back_populates="parties")
+
+    __table_args__ = (
+        Index("ix_ownership_event_parties_event_id", "ownership_event_id"),
+        UniqueConstraint("ownership_event_id", "person_id", "role", name="uq_event_party_role"),
+    )
+
+
+class OwnershipShare(Base):
+    __tablename__ = "ownership_shares"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    ownership_event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ownership_events.id", ondelete="CASCADE"), nullable=False
+    )
+    person_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("persons.id", ondelete="SET NULL"), nullable=True
+    )
+    share_numerator: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    share_denominator: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    share_text: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    ownership_event: Mapped[OwnershipEvent] = relationship(back_populates="shares")
+
+    __table_args__ = (Index("ix_ownership_shares_event_id", "ownership_event_id"),)
+
+
+class Fact(Base):
+    __tablename__ = "facts"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    fact_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True
+    )
+    fact_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    subject_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    subject_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    predicate: Mapped[str] = mapped_column(String(128), nullable=False)
+    value_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    value_normalized: Mapped[str | None] = mapped_column(Text, nullable=True)
+    value_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    unit: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    verification_state: Mapped[str] = mapped_column(String(32), default="EXTRACTED", nullable=False)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    extraction_version: Mapped[str] = mapped_column(String(32), default="1.0", nullable=False)
+    model_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("model_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    evidence_links: Mapped[list[FactEvidence]] = relationship(back_populates="fact")
+
+    __table_args__ = (
+        Index("ix_facts_case_id", "case_id"),
+        Index("ix_facts_document_id", "document_id"),
+        Index("ix_facts_fact_type", "fact_type"),
+        Index("ix_facts_verification_state", "verification_state"),
+    )
+
+
+class FactEvidence(Base):
+    __tablename__ = "fact_evidence"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    fact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("facts.id", ondelete="CASCADE"), nullable=False
+    )
+    evidence_item_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("evidence_items.id", ondelete="CASCADE"), nullable=False
+    )
+    link_role: Mapped[str] = mapped_column(String(32), default="supports", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    fact: Mapped[Fact] = relationship(back_populates="evidence_links")
+    evidence_item: Mapped[EvidenceItem] = relationship()
+
+    __table_args__ = (
+        UniqueConstraint("fact_id", "evidence_item_id", name="uq_fact_evidence"),
+        Index("ix_fact_evidence_fact_id", "fact_id"),
+        Index("ix_fact_evidence_evidence_item_id", "evidence_item_id"),
+    )

@@ -1,0 +1,44 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pie
+      POSTGRES_PASSWORD: pie
+      POSTGRES_DB: pie
+    ports:
+      - "55432:5432"
+    volumes:
+      - pie_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pie -d pie"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Optional MinIO — use quay.io mirror if Docker Hub denies minio/minio
+  minio:
+    profiles: ["s3"]
+    image: quay.io/minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: pie_minio
+      MINIO_ROOT_PASSWORD: pie_minio_secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - pie_minio:/data
+
+volumes:
+  pie_pg:
+  pie_minio:
