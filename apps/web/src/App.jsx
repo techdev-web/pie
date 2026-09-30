@@ -59,6 +59,8 @@ export default function App() {
   const [reviewType, setReviewType] = useState("");
   const [auditEvents, setAuditEvents] = useState([]);
   const [decideBusy, setDecideBusy] = useState(null);
+  const [report, setReport] = useState(null);
+  const [reportBusy, setReportBusy] = useState(false);
 
   const saveKey = () => {
     localStorage.setItem("pie_api_key", apiKey);
@@ -142,6 +144,44 @@ export default function App() {
     [apiKey]
   );
 
+  const loadReport = useCallback(
+    async (caseId, { regenerate = false } = {}) => {
+      if (!caseId) return;
+      setReportBusy(true);
+      try {
+        const q = regenerate ? "?regenerate=true" : "";
+        const data = await api(`/v1/cases/${caseId}/report${q}`, { apiKey });
+        setReport(data);
+      } catch {
+        setReport(null);
+      } finally {
+        setReportBusy(false);
+      }
+    },
+    [apiKey]
+  );
+
+  const runAnalyze = async () => {
+    if (!selectedCase) return;
+    setError("");
+    setStatus("Analyzing…");
+    try {
+      const res = await api(`/v1/cases/${selectedCase}/analyze`, {
+        apiKey,
+        method: "POST",
+        body: { mode: "incremental", sync: true, generate_report: true },
+      });
+      setStatus(
+        `Analyze ${res.status}${res.report_id ? ` · report ${res.report_id}` : ""}`
+      );
+      await loadIntelligence(selectedCase);
+      await loadReport(selectedCase);
+      await loadAudit(selectedCase);
+    } catch (e) {
+      setError(e.message || String(e));
+    }
+  };
+
   const loadCase = useCallback(
     async (caseId) => {
       setError("");
@@ -154,6 +194,7 @@ export default function App() {
       await loadIntelligence(caseId);
       await loadReviewTasks(caseId);
       await loadAudit(caseId);
+      await loadReport(caseId);
       if (detail.documents?.length) {
         setSelectedDoc(detail.documents[0].id);
       } else {
@@ -164,9 +205,10 @@ export default function App() {
         setIntelligence(null);
         setReviewTasks([]);
         setAuditEvents([]);
+        setReport(null);
       }
     },
-    [apiKey, loadIntelligence, loadReviewTasks, loadAudit]
+    [apiKey, loadIntelligence, loadReviewTasks, loadAudit, loadReport]
   );
 
   useEffect(() => {
@@ -215,6 +257,7 @@ export default function App() {
           }
           await loadReviewTasks(selectedCase);
           await loadAudit(selectedCase);
+          await loadReport(selectedCase);
         }
         return;
       }
@@ -306,6 +349,7 @@ export default function App() {
       await loadFacts(selectedCase, null);
       await loadIntelligence(selectedCase);
       await loadAudit(selectedCase);
+      await loadReport(selectedCase);
     } finally {
       setDecideBusy(null);
     }
@@ -703,6 +747,104 @@ export default function App() {
                   </div>
                 )}
               </div>
+            )}
+          </div>
+
+          <div className="panel">
+            <div className="row">
+              <h3 style={{ margin: 0, flex: 1 }}>Diligence report</h3>
+              {selectedCase && (
+                <>
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={reportBusy}
+                    onClick={() => runAnalyze().catch((e) => setError(e.message))}
+                  >
+                    Analyze + report
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={reportBusy}
+                    onClick={() =>
+                      loadReport(selectedCase, { regenerate: true }).catch((e) =>
+                        setError(e.message)
+                      )
+                    }
+                  >
+                    Regenerate
+                  </button>
+                  <a
+                    className="secondary"
+                    style={{ textDecoration: "none", padding: "0.35rem 0.7rem" }}
+                    href={`/v1/cases/${selectedCase}/report?format=pdf`}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      fetch(`/v1/cases/${selectedCase}/report?format=pdf`, {
+                        headers: { "X-API-Key": apiKey },
+                      })
+                        .then(async (r) => {
+                          if (!r.ok) throw new Error(await r.text());
+                          return r.blob();
+                        })
+                        .then((blob) => {
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement("a");
+                          a.href = url;
+                          a.download = `${report?.report_id || "pie-report"}.pdf`;
+                          a.click();
+                          URL.revokeObjectURL(url);
+                        })
+                        .catch((err) => setError(err.message));
+                    }}
+                  >
+                    PDF
+                  </a>
+                </>
+              )}
+            </div>
+            {!selectedCase && <p className="status">Select a case to generate a report.</p>}
+            {selectedCase && !report && (
+              <p className="status">
+                No report yet. Run Analyze + report after documents are processed.
+              </p>
+            )}
+            {report && (
+              <>
+                <div className="score-strip">
+                  <span className="pill">{report.status}</span>
+                  <span className="pill">v{report.version}</span>
+                  <span className="status">{report.report_id}</span>
+                </div>
+                <p className="status">
+                  Open conflicts: {report.body?.summary?.open_conflicts ?? "—"} · Missing:{" "}
+                  {report.body?.summary?.missing_evidence ?? "—"} · Risk:{" "}
+                  {report.body?.summary?.risk_level ?? "—"}
+                </p>
+                {!!report.reused_sections?.length && (
+                  <p className="status">
+                    Reused sections after regen: {report.reused_sections.join(", ")}
+                  </p>
+                )}
+                {report.rebuild_reason && (
+                  <p className="status">Rebuild reason: {report.rebuild_reason}</p>
+                )}
+                <ul className="list">
+                  {(report.body?.section_order || Object.keys(report.body?.sections || {})).map(
+                    (key) => {
+                      const sec = report.body?.sections?.[key];
+                      if (!sec) return null;
+                      return (
+                        <li key={key}>
+                          <div className="fact-value">{sec.heading || key}</div>
+                          <div className="status">{sec.conclusion || ""}</div>
+                        </li>
+                      );
+                    }
+                  )}
+                </ul>
+              </>
             )}
           </div>
 

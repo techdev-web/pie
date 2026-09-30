@@ -4,6 +4,8 @@ from contextvars import ContextVar
 
 import structlog
 
+from packages.observability.redaction import redact_event_dict
+
 request_id_ctx: ContextVar[str | None] = ContextVar("request_id", default=None)
 
 
@@ -22,6 +24,7 @@ def configure_logging(level: str = "INFO") -> None:
         processors=[
             structlog.contextvars.merge_contextvars,
             _add_request_id,
+            redact_event_dict,
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.processors.StackInfoRenderer(),

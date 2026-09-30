@@ -632,9 +632,9 @@ GET  /v1/cases/{id}/report           # PDF/JSON
 
 ### 7.4 Exit checklist
 
-- [ ] Report regeneration after a review decision changes only dependent sections.  
-- [ ] Partner can complete upload → job → report without UI.  
-- [ ] Chat and report never disagree on conflict status for the same fact set.
+- [x] Report regeneration after a review decision changes only dependent sections.  
+- [x] Partner can complete upload → job → report without UI.  
+- [x] Chat and report never disagree on conflict status for the same fact set.
 
 ------------------------------------------------------------------------
 

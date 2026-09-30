@@ -1,4 +1,4 @@
-"""SQLAlchemy models for Phase 0–6."""
+"""SQLAlchemy models for Phase 0–7."""
 
 from __future__ import annotations
 
@@ -57,6 +57,11 @@ class ApiKey(Base):
     key_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     key_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Phase 7: partner key scoping ("*" = all)
+    scopes: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=lambda: ["*"])
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    key_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     tenant: Mapped[Tenant] = relationship(back_populates="api_keys")
@@ -1143,4 +1148,46 @@ class RiskSnapshot(Base):
     __table_args__ = (
         Index("ix_risk_snapshots_case_id", "case_id"),
         Index("ix_risk_snapshots_case_created", "case_id", "created_at"),
+    )
+
+
+# --- Phase 7 ---
+
+
+class ReportArtifact(Base):
+    __tablename__ = "report_artifacts"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    report_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    report_type: Mapped[str] = mapped_column(String(64), default="dd_memo", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="READY", nullable=False)
+    format: Mapped[str] = mapped_column(String(32), default="json", nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    truth_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    case_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    generator_version: Mapped[str] = mapped_column(String(32), default="1.0", nullable=False)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    body: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    section_fingerprints: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    reused_sections: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    rebuild_reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    storage_uri: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    pdf_storage_uri: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    triggered_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    parent_report_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_report_artifacts_case_id", "case_id"),
+        Index("ix_report_artifacts_case_created", "case_id", "created_at"),
+        Index("ix_report_artifacts_tenant_status", "tenant_id", "status"),
+        Index("ix_report_artifacts_truth_fp", "case_id", "truth_fingerprint"),
     )

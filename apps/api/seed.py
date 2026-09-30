@@ -45,6 +45,7 @@ async def seed() -> str:
                     key_hash=key_h,
                     key_prefix=key_prefix(raw_key),
                     is_active=True,
+                    scopes=["*"],
                 )
             )
         await session.commit()

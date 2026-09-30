@@ -644,7 +644,9 @@ def _public_id(*parts: str) -> str:
     return sha256_bytes("|".join(parts).encode())[:20]
 
 
-async def run_case_reconciliation(session: AsyncSession, case_id: uuid.UUID) -> dict[str, Any]:
+async def run_case_reconciliation(
+    session: AsyncSession, case_id: uuid.UUID, *, force: bool = False
+) -> dict[str, Any]:
     """Reconcile a case: conflicts, gaps, graphs, scorecard. Idempotent per fingerprint."""
     case = await session.get(Case, case_id)
     if case is None:
@@ -678,7 +680,7 @@ async def run_case_reconciliation(session: AsyncSession, case_id: uuid.UUID) -> 
             )
         )
     ).scalar_one_or_none()
-    if existing is not None:
+    if existing is not None and not force:
         log.info(
             "reconcile_skipped",
             case_id=str(case_id),
@@ -686,6 +688,17 @@ async def run_case_reconciliation(session: AsyncSession, case_id: uuid.UUID) -> 
             prior_run=str(existing.id),
         )
         return {"skipped": True, "fingerprint": fingerprint}
+
+    if existing is not None and force:
+        existing.status = "superseded"
+        existing.finished_at = datetime.now(timezone.utc)
+        await session.flush()
+        log.info(
+            "reconcile_forced",
+            case_id=str(case_id),
+            fingerprint=fingerprint,
+            prior_run=str(existing.id),
+        )
 
     run = CaseStageRun(
         id=uuid.uuid4(),

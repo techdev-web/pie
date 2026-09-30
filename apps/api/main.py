@@ -1,4 +1,4 @@
-"""FastAPI application for PIE Phase 0–6."""
+"""FastAPI application for PIE Phase 0–7."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from apps.api.routes import (
     health,
     intelligence,
     jobs,
+    reports,
     review,
 )
 from packages.config import get_settings
@@ -37,7 +38,7 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    app = FastAPI(title="PIE API", version="0.6.0", lifespan=lifespan)
+    app = FastAPI(title="PIE API", version="0.7.0", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,
@@ -54,6 +55,7 @@ def create_app() -> FastAPI:
     app.include_router(intelligence.router, prefix="/v1")
     app.include_router(chat.router, prefix="/v1")
     app.include_router(review.router, prefix="/v1")
+    app.include_router(reports.router, prefix="/v1")
     return app
 
 

@@ -469,3 +469,62 @@ class ReviewDecisionResponse(BaseModel):
     task: ReviewTaskOut
     decision: ReviewDecisionOut
 
+
+# --- Phase 7 ---
+
+
+class AnalyzeRequest(BaseModel):
+    mode: str = Field(
+        default="incremental",
+        description="incremental | full",
+    )
+    force: bool = False
+    generate_report: bool = True
+    sync: bool = False
+    reprocess_documents: bool = False
+
+
+class AnalyzeResponse(BaseModel):
+    mode: str
+    status: str
+    case_id: uuid.UUID
+    force: bool = False
+    reconcile_result: dict[str, Any] | None = None
+    report_id: str | None = None
+    job_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
+class ReportArtifactOut(BaseModel):
+    id: uuid.UUID
+    report_id: str
+    case_id: uuid.UUID
+    report_type: str
+    status: str
+    format: str
+    version: int
+    truth_fingerprint: str
+    case_fingerprint: str | None = None
+    generator_version: str
+    title: str
+    body: dict[str, Any]
+    section_fingerprints: dict[str, Any] = Field(default_factory=dict)
+    reused_sections: list[Any] = Field(default_factory=list)
+    rebuild_reason: str | None = None
+    pdf_storage_uri: str | None = None
+    parent_report_id: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ReportExportOut(BaseModel):
+    report_id: str
+    version: int
+    status: str
+    truth_fingerprint: str
+    reused_sections: list[Any] = Field(default_factory=list)
+    rebuild_reason: str | None = None
+    created_at: datetime
+    title: str
+

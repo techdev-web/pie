@@ -638,6 +638,32 @@ async def apply_review_decision(
     task.updated_at = now
     await session.commit()
     await refresh_case_memory(session, case_id=case_id, tenant_id=tenant_id)
+
+    # Phase 7: regenerate report — only dependent sections rebuild
+    try:
+        from packages.reports import generate_case_report, mark_reports_stale
+
+        await mark_reports_stale(
+            session,
+            case_id=case_id,
+            tenant_id=tenant_id,
+            reason=f"review:{action}",
+        )
+        await generate_case_report(
+            session,
+            case_id=case_id,
+            tenant_id=tenant_id,
+            triggered_by="review.decision",
+            rebuild_reason=f"review:{action}",
+            actor=actor,
+        )
+    except Exception as exc:
+        log.warning(
+            "report_regen_after_review_failed",
+            case_id=str(case_id),
+            error=str(exc),
+        )
+
     await session.refresh(task)
     await session.refresh(decision)
     log.info(
