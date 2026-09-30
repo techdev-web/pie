@@ -1,4 +1,4 @@
-"""SQLAlchemy models for Phase 0–5."""
+"""SQLAlchemy models for Phase 0–6."""
 
 from __future__ import annotations
 
@@ -1038,4 +1038,109 @@ class ReviewDecision(Base):
     __table_args__ = (
         Index("ix_review_decisions_task_id", "review_task_id"),
         Index("ix_review_decisions_case_id", "case_id"),
+    )
+
+
+# --- Phase 6 ---
+
+
+class LegalFinding(Base):
+    __tablename__ = "legal_findings"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    finding_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    category: Mapped[str] = mapped_column(String(64), nullable=False)
+    severity: Mapped[str] = mapped_column(String(32), default="HIGH", nullable=False)
+    statement: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="UNRESOLVED", nullable=False)
+    layer: Mapped[str] = mapped_column(String(32), default="extract", nullable=False)
+    evidence_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    related_fact_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    related_conflict_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    related_gap_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    missing_evidence: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    recommended_action: Mapped[str | None] = mapped_column(Text, nullable=True)
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    engine_version: Mapped[str] = mapped_column(String(32), default="1.0", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_legal_findings_case_id", "case_id"),
+        Index("ix_legal_findings_status", "case_id", "status"),
+        Index("ix_legal_findings_category", "case_id", "category"),
+    )
+
+
+class GeoFinding(Base):
+    __tablename__ = "geo_findings"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    finding_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    parcel_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("parcels.id", ondelete="SET NULL"), nullable=True
+    )
+    finding_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    severity: Mapped[str] = mapped_column(String(32), default="MEDIUM", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="OPEN", nullable=False)
+    statement: Mapped[str] = mapped_column(Text, nullable=False)
+    # GIS hooks: validity ≠ legal / survey identity
+    geometry_valid: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    identity_match: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    boundary_consistent: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    related_fact_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    engine_version: Mapped[str] = mapped_column(String(32), default="1.0", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_geo_findings_case_id", "case_id"),
+        Index("ix_geo_findings_type", "case_id", "finding_type"),
+        Index("ix_geo_findings_parcel_id", "parcel_id"),
+    )
+
+
+class RiskSnapshot(Base):
+    __tablename__ = "risk_snapshots"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    case_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    risk_level: Mapped[str] = mapped_column(String(32), nullable=False)
+    score: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    weights_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    drivers: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    ownership_timeline: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    confidence_profiles: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    disclaimer: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default=(
+            "Risk score is a weighted checklist of unresolved diligence signals, "
+            "not a legal conclusion about title."
+        ),
+    )
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    engine_version: Mapped[str] = mapped_column(String(32), default="1.0", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_risk_snapshots_case_id", "case_id"),
+        Index("ix_risk_snapshots_case_created", "case_id", "created_at"),
     )

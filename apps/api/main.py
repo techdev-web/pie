@@ -1,4 +1,4 @@
-"""FastAPI application for PIE Phase 0–5."""
+"""FastAPI application for PIE Phase 0–6."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    app = FastAPI(title="PIE API", version="0.5.0", lifespan=lifespan)
+    app = FastAPI(title="PIE API", version="0.6.0", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,

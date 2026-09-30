@@ -1,4 +1,4 @@
-"""Phase 3 case intelligence: conflicts, gaps, graphs, scorecard."""
+"""Phase 3–6 case intelligence: conflicts, gaps, graphs, scorecard, risk, findings."""
 
 from __future__ import annotations
 
@@ -16,10 +16,14 @@ from apps.api.schemas import (
     CompletenessScorecardOut,
     ConflictFactRef,
     ConflictOut,
+    GeoFindingOut,
     GraphEdgeOut,
     GraphNodeOut,
     GraphOut,
+    LegalFindingOut,
     MissingEvidenceOut,
+    RiskDriverOut,
+    RiskSnapshotOut,
 )
 from packages.domain.db import get_session
 from packages.domain.models import (
@@ -27,9 +31,12 @@ from packages.domain.models import (
     CaseCompletenessSnapshot,
     Conflict,
     ConflictFact,
+    GeoFinding,
     GraphEdge,
     GraphNode,
+    LegalFinding,
     MissingEvidence,
+    RiskSnapshot,
 )
 from packages.pipeline.reconciliation import run_case_reconciliation
 
@@ -116,6 +123,36 @@ def _graph_out(
     )
 
 
+def _risk_to_out(snap: RiskSnapshot) -> RiskSnapshotOut:
+    drivers = [
+        RiskDriverOut(
+            code=d.get("code", ""),
+            label=d.get("label", ""),
+            weight=int(d.get("weight", 0)),
+            source_kind=d.get("source_kind", ""),
+            source_id=d.get("source_id"),
+            details=d.get("details") or {},
+        )
+        for d in (snap.drivers or [])
+        if isinstance(d, dict)
+    ]
+    return RiskSnapshotOut(
+        id=snap.id,
+        case_id=snap.case_id,
+        case_fingerprint=snap.case_fingerprint,
+        risk_level=snap.risk_level,
+        score=snap.score,
+        weights_version=snap.weights_version,
+        drivers=drivers,
+        ownership_timeline=list(snap.ownership_timeline or []),
+        confidence_profiles=list(snap.confidence_profiles or []),
+        disclaimer=snap.disclaimer,
+        details=snap.details,
+        engine_version=snap.engine_version,
+        created_at=snap.created_at,
+    )
+
+
 @router.get("/cases/{case_id}/conflicts", response_model=list[ConflictOut])
 async def list_conflicts(
     case_id: uuid.UUID,
@@ -158,6 +195,86 @@ async def list_missing_evidence(
         .all()
     )
     return [MissingEvidenceOut.model_validate(r) for r in rows]
+
+
+@router.get("/cases/{case_id}/risk", response_model=RiskSnapshotOut | None)
+async def get_risk(
+    case_id: uuid.UUID,
+    auth: AuthContext = Depends(require_auth),
+    session: AsyncSession = Depends(get_session),
+) -> RiskSnapshotOut | None:
+    await _assert_case_access(session, case_id, auth.tenant_id)
+    snap = (
+        await session.execute(
+            select(RiskSnapshot)
+            .where(RiskSnapshot.case_id == case_id, RiskSnapshot.tenant_id == auth.tenant_id)
+            .order_by(RiskSnapshot.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return _risk_to_out(snap) if snap else None
+
+
+@router.get("/cases/{case_id}/legal-findings", response_model=list[LegalFindingOut])
+async def list_legal_findings(
+    case_id: uuid.UUID,
+    status: str | None = Query(default=None),
+    auth: AuthContext = Depends(require_auth),
+    session: AsyncSession = Depends(get_session),
+) -> list[LegalFindingOut]:
+    await _assert_case_access(session, case_id, auth.tenant_id)
+    q = (
+        select(LegalFinding)
+        .where(LegalFinding.case_id == case_id, LegalFinding.tenant_id == auth.tenant_id)
+        .order_by(LegalFinding.created_at.desc())
+    )
+    if status:
+        q = q.where(LegalFinding.status == status)
+    rows = list((await session.execute(q)).scalars().all())
+    return [LegalFindingOut.model_validate(r) for r in rows]
+
+
+@router.get("/cases/{case_id}/geo-findings", response_model=list[GeoFindingOut])
+async def list_geo_findings(
+    case_id: uuid.UUID,
+    auth: AuthContext = Depends(require_auth),
+    session: AsyncSession = Depends(get_session),
+) -> list[GeoFindingOut]:
+    await _assert_case_access(session, case_id, auth.tenant_id)
+    rows = list(
+        (
+            await session.execute(
+                select(GeoFinding)
+                .where(GeoFinding.case_id == case_id, GeoFinding.tenant_id == auth.tenant_id)
+                .order_by(GeoFinding.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [GeoFindingOut.model_validate(r) for r in rows]
+
+
+@router.get("/cases/{case_id}/ownership-timeline")
+async def get_ownership_timeline(
+    case_id: uuid.UUID,
+    auth: AuthContext = Depends(require_auth),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    await _assert_case_access(session, case_id, auth.tenant_id)
+    snap = (
+        await session.execute(
+            select(RiskSnapshot)
+            .where(RiskSnapshot.case_id == case_id, RiskSnapshot.tenant_id == auth.tenant_id)
+            .order_by(RiskSnapshot.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return {
+        "case_id": str(case_id),
+        "timeline": list(snap.ownership_timeline or []) if snap else [],
+        "risk_snapshot_id": str(snap.id) if snap else None,
+    }
 
 
 @router.get("/cases/{case_id}/intelligence", response_model=CaseIntelligenceOut)
@@ -241,6 +358,41 @@ async def get_intelligence(
             created_at=snapshot.created_at,
         )
 
+    risk_snap = (
+        await session.execute(
+            select(RiskSnapshot)
+            .where(RiskSnapshot.case_id == case_id, RiskSnapshot.tenant_id == auth.tenant_id)
+            .order_by(RiskSnapshot.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    legal = list(
+        (
+            await session.execute(
+                select(LegalFinding)
+                .where(
+                    LegalFinding.case_id == case_id,
+                    LegalFinding.tenant_id == auth.tenant_id,
+                )
+                .order_by(LegalFinding.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    geo = list(
+        (
+            await session.execute(
+                select(GeoFinding)
+                .where(GeoFinding.case_id == case_id, GeoFinding.tenant_id == auth.tenant_id)
+                .order_by(GeoFinding.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    risk_out = _risk_to_out(risk_snap) if risk_snap else None
     return CaseIntelligenceOut(
         case_id=case_id,
         open_conflicts_count=len(conflicts),
@@ -250,6 +402,11 @@ async def get_intelligence(
         missing_evidence=[MissingEvidenceOut.model_validate(g) for g in gaps],
         document_graph=_graph_out("document", nodes, edges),
         entity_event_graph=_graph_out("entity_event", nodes, edges),
+        risk=risk_out,
+        legal_findings=[LegalFindingOut.model_validate(f) for f in legal],
+        geo_findings=[GeoFindingOut.model_validate(f) for f in geo],
+        ownership_timeline=list(risk_snap.ownership_timeline or []) if risk_snap else [],
+        confidence_profiles=list(risk_snap.confidence_profiles or []) if risk_snap else [],
     )
 
 

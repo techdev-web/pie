@@ -208,6 +208,78 @@ class CompletenessScorecardOut(BaseModel):
     created_at: datetime | None = None
 
 
+# --- Phase 6 response shapes (used by intelligence) ---
+
+
+class RiskDriverOut(BaseModel):
+    code: str
+    label: str
+    weight: int
+    source_kind: str
+    source_id: str | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class RiskSnapshotOut(BaseModel):
+    id: uuid.UUID
+    case_id: uuid.UUID
+    case_fingerprint: str
+    risk_level: str
+    score: int
+    weights_version: str
+    drivers: list[RiskDriverOut] = Field(default_factory=list)
+    ownership_timeline: list[dict[str, Any]] = Field(default_factory=list)
+    confidence_profiles: list[dict[str, Any]] = Field(default_factory=list)
+    disclaimer: str
+    details: dict[str, Any] | None = None
+    engine_version: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class LegalFindingOut(BaseModel):
+    id: uuid.UUID
+    finding_id: str
+    case_id: uuid.UUID
+    category: str
+    severity: str
+    statement: str
+    status: str
+    layer: str
+    evidence_ids: list[Any] = Field(default_factory=list)
+    related_fact_ids: list[Any] = Field(default_factory=list)
+    related_conflict_id: str | None = None
+    related_gap_id: str | None = None
+    missing_evidence: list[Any] = Field(default_factory=list)
+    recommended_action: str | None = None
+    details: dict[str, Any] | None = None
+    engine_version: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class GeoFindingOut(BaseModel):
+    id: uuid.UUID
+    finding_id: str
+    case_id: uuid.UUID
+    parcel_id: uuid.UUID | None = None
+    finding_type: str
+    severity: str
+    status: str
+    statement: str
+    geometry_valid: bool | None = None
+    identity_match: str | None = None
+    boundary_consistent: str | None = None
+    related_fact_ids: list[Any] = Field(default_factory=list)
+    details: dict[str, Any] | None = None
+    engine_version: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class CaseIntelligenceOut(BaseModel):
     case_id: uuid.UUID
     open_conflicts_count: int
@@ -217,6 +289,11 @@ class CaseIntelligenceOut(BaseModel):
     missing_evidence: list[MissingEvidenceOut] = Field(default_factory=list)
     document_graph: GraphOut | None = None
     entity_event_graph: GraphOut | None = None
+    risk: RiskSnapshotOut | None = None
+    legal_findings: list[LegalFindingOut] = Field(default_factory=list)
+    geo_findings: list[GeoFindingOut] = Field(default_factory=list)
+    ownership_timeline: list[dict[str, Any]] = Field(default_factory=list)
+    confidence_profiles: list[dict[str, Any]] = Field(default_factory=list)
 
 
 # --- Phase 4 ---

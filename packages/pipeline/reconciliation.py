@@ -41,7 +41,7 @@ log = get_logger("pipeline.reconciliation")
 
 RECONCILIATION_VERSION = "1.0"
 STAGE_NAME = "reconcile"
-STAGE_VERSION = "1"
+STAGE_VERSION = "2"  # Phase 6: domain engines after review sync
 
 # Fact types that participate in value comparison across documents
 COMPARE_GROUPS: dict[str, tuple[str, ...]] = {
@@ -1070,6 +1070,20 @@ async def _reconcile_body(
     except Exception as exc:
         log.warning("case_memory_refresh_failed", case_id=str(case_id), error=str(exc))
 
+    # Phase 6: title/property domain engines (ownership chain, legal findings, risk)
+    domain_stats: dict[str, Any] = {}
+    try:
+        from packages.dd.runner import run_domain_engines
+
+        domain_stats = await run_domain_engines(
+            session,
+            case_id=case_id,
+            tenant_id=tenant_id,
+            case_fingerprint=fingerprint,
+        )
+    except Exception as exc:
+        log.warning("domain_engines_failed", case_id=str(case_id), error=str(exc))
+
     return {
         "skipped": False,
         "fingerprint": fingerprint,
@@ -1077,6 +1091,7 @@ async def _reconcile_body(
         "missing_evidence": missing_count,
         "dimensions": dimensions,
         "review_tasks": review_stats,
+        "domain": domain_stats,
         "document_nodes": len(doc_graph.nodes),
         "entity_nodes": len(entity_graph.nodes),
     }

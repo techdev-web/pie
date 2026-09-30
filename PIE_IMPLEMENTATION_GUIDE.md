@@ -584,9 +584,9 @@ Human review status
 
 ### 6.4 Exit checklist
 
-- [ ] Ownership chain timeline UI from events.  
-- [ ] Mortgage-without-release example yields `UNRESOLVED` + missing release, not “clear.”  
-- [ ] Risk panel lists drivers tied to findings/conflicts.
+- [x] Ownership chain timeline UI from events.  
+- [x] Mortgage-without-release example yields `UNRESOLVED` + missing release, not “clear.”  
+- [x] Risk panel lists drivers tied to findings/conflicts.
 
 ------------------------------------------------------------------------
 

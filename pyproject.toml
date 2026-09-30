@@ -1,7 +1,7 @@
 [project]
 name = "pie"
-description = "PIE — Property Intelligence Engine (Phase 0–5)"
-version = "0.5.0"
+description = "PIE — Property Intelligence Engine (Phase 0–6)"
+version = "0.6.0"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

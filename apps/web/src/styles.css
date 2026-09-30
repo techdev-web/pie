@@ -306,6 +306,53 @@ button:disabled {
   font-size: 1rem;
 }
 
+.risk-drivers {
+  margin: 0.4rem 0;
+}
+
+.risk-disclaimer {
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
+.timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-left: 2px solid var(--line);
+}
+
+.timeline-item {
+  position: relative;
+  padding: 0.45rem 0 0.45rem 1rem;
+  margin-left: 0.35rem;
+}
+
+.timeline-item::before {
+  content: "";
+  position: absolute;
+  left: -0.45rem;
+  top: 0.7rem;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--accent-2);
+  border: 2px solid var(--bg-elev);
+}
+
+.timeline-item.status-gap::before,
+.timeline-item.status-temporal_conflict::before,
+.timeline-item.status-share_oversell::before {
+  background: var(--danger);
+}
+
+.timeline-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
 .review-filters {
   gap: 0.75rem;
   flex-wrap: wrap;

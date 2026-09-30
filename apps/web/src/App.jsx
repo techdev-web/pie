@@ -563,6 +563,91 @@ export default function App() {
                 </div>
               </>
             )}
+            {intelligence?.risk && (
+              <div className="intel-block">
+                <h4>Risk</h4>
+                <div className="score-strip">
+                  <span
+                    className={`pill ${
+                      ["HIGH", "CRITICAL"].includes(intelligence.risk.risk_level)
+                        ? "danger"
+                        : intelligence.risk.risk_level === "MEDIUM"
+                          ? "warn"
+                          : ""
+                    }`}
+                  >
+                    {intelligence.risk.risk_level}
+                  </span>
+                  <span className="pill">score {intelligence.risk.score}</span>
+                  <span className="status">{intelligence.risk.weights_version}</span>
+                </div>
+                {!!intelligence.risk.drivers?.length && (
+                  <ul className="list risk-drivers">
+                    {intelligence.risk.drivers.map((d) => (
+                      <li key={`${d.code}-${d.source_id || d.label}`}>
+                        <span className="fact-value">
+                          {d.label}{" "}
+                          <span className="pill warn">+{d.weight}</span>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <p className="status risk-disclaimer">{intelligence.risk.disclaimer}</p>
+              </div>
+            )}
+            {!!intelligence?.ownership_timeline?.length && (
+              <div className="intel-block">
+                <h4>Ownership chain</h4>
+                <ol className="timeline">
+                  {intelligence.ownership_timeline.map((e) => (
+                    <li key={e.event_id} className={`timeline-item status-${(e.chain_status || "OK").toLowerCase()}`}>
+                      <div className="timeline-head">
+                        <span className="pill">{e.event_type}</span>{" "}
+                        <span className="pill">{e.chain_status || "OK"}</span>{" "}
+                        <span className="status">
+                          {e.event_date
+                            ? new Date(e.event_date).toLocaleDateString()
+                            : e.event_date_raw || "undated"}
+                        </span>
+                      </div>
+                      <div className="fact-value">
+                        {(e.parties || [])
+                          .map((p) => `${p.role}: ${p.display_name || p.person_id?.slice?.(0, 8) || "?"}`)
+                          .join(" · ") || "No parties"}
+                      </div>
+                      {!!e.notes?.length && (
+                        <div className="status">{e.notes.join(" ")}</div>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )}
+            {!!intelligence?.legal_findings?.length && (
+              <div className="intel-block">
+                <h4>Legal findings</h4>
+                <ul className="list">
+                  {intelligence.legal_findings.map((f) => (
+                    <li key={f.finding_id}>
+                      <span className={`pill ${f.status === "UNRESOLVED" ? "danger" : "warn"}`}>
+                        {f.status}
+                      </span>{" "}
+                      <span className="pill">{f.category}</span>
+                      <div className="fact-value">{f.statement}</div>
+                      {!!f.missing_evidence?.length && (
+                        <div className="status">
+                          Missing: {f.missing_evidence.join(", ")}
+                        </div>
+                      )}
+                      {f.recommended_action && (
+                        <div className="status">{f.recommended_action}</div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             {!!intelligence?.conflicts?.length && (
               <div className="intel-block">
                 <h4>Open conflicts</h4>
