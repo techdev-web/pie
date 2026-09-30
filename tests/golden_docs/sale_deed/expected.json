@@ -1,0 +1,27 @@
+{
+  "doc_type": "sale_deed",
+  "filename": "sale_deed_golden.pdf",
+  "evidence_pages": [
+    {
+      "page_number": 1,
+      "evidence_id": "ev_1",
+      "text": "Sale Deed dated 12/03/2020. Gata No. 183/2 Village Example Seller Ram Kumar Buyer Sita Devi Registration No. REG-1234 Area 0.5 acre"
+    }
+  ],
+  "expected": {
+    "facts": [
+      {"fact_type": "party.seller", "value_text": "Ram Kumar"},
+      {"fact_type": "party.buyer", "value_text": "Sita Devi"},
+      {"fact_type": "party.owner", "value_text": "Sita Devi"},
+      {"fact_type": "parcel.survey_number", "value_text": "183/2"},
+      {"fact_type": "transaction.date", "value_text": "12/03/2020"},
+      {"fact_type": "transaction.registration_number", "value_text": "REG-1234"},
+      {"fact_type": "parcel.area", "value_text": "0.5 acre"}
+    ],
+    "conflict_types": [],
+    "id_queries": [
+      {"query": "survey 183/2", "expected_id": "183/2"},
+      {"query": "REG-1234", "expected_id": "REG-1234"}
+    ]
+  }
+}

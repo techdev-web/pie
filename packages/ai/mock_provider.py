@@ -330,16 +330,25 @@ class MockProvider:
                 "answer": "Conflicts are present; see packed conflict list. Do not invent a winner.",
                 "status": "CONFLICTING",
                 "open_questions": [c.get("summary") for c in conflicts[:3]],
+                "model": "mock",
+                "input_tokens": 10,
+                "output_tokens": 20,
             }
         if not hits:
             return {
                 "answer": "Insufficient evidence in packed context.",
                 "status": "INSUFFICIENT_EVIDENCE",
                 "open_questions": [],
+                "model": "mock",
+                "input_tokens": 5,
+                "output_tokens": 10,
             }
         lines = [f"- {h.get('snippet')}" for h in hits[:5]]
         return {
             "answer": "Mock synthesis from packed hits:\n" + "\n".join(lines),
             "status": "PARTIALLY_SUPPORTED",
             "open_questions": [],
+            "model": "mock",
+            "input_tokens": 10,
+            "output_tokens": 20,
         }

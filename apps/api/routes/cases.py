@@ -8,7 +8,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from apps.api.deps import AuthContext, require_auth
-from apps.api.schemas import CaseCreate, CaseDetailOut, CaseOut, DocumentOut
+from apps.api.schemas import (
+    CaseCreate,
+    CaseDetailOut,
+    CaseOut,
+    DocumentOut,
+    ReprocessRequest,
+    ReprocessResponse,
+)
 from packages.domain.db import get_session
 from packages.domain.models import AuditEvent, Case, CaseDocument, CaseMember, Document
 
@@ -91,4 +98,43 @@ async def get_case(
         created_at=case.created_at,
         updated_at=case.updated_at,
         documents=[DocumentOut.model_validate(d) for d in docs],
+    )
+
+
+@router.post("/cases/{case_id}/reprocess", response_model=ReprocessResponse)
+async def reprocess_case_endpoint(
+    case_id: uuid.UUID,
+    body: ReprocessRequest,
+    auth: AuthContext = Depends(require_auth),
+    session: AsyncSession = Depends(get_session),
+) -> ReprocessResponse:
+    from apps.api.queue import enqueue_process_document, enqueue_reconcile_case
+    from packages.pipeline.reprocess import reprocess_case
+
+    try:
+        result = await reprocess_case(
+            session,
+            case_id=case_id,
+            tenant_id=auth.tenant_id,
+            mode=body.mode,
+            stages=body.stages,
+            force=body.force,
+            actor=str(auth.api_key_id),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    for job_id in result["job_ids"]:
+        await enqueue_process_document(job_id)
+    if result["job_ids"]:
+        await enqueue_reconcile_case(case_id, force=body.mode == "prompt_bump" or body.force)
+
+    return ReprocessResponse(
+        mode=result["mode"],
+        force=result["force"],
+        stages=result["stages"],
+        document_ids=result["document_ids"],
+        job_ids=result["job_ids"],
+        invalidated_stage_runs=result["invalidated_stage_runs"],
+        status="queued",
     )

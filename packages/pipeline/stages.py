@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 import uuid
 
 import pymupdf as fitz
@@ -9,13 +10,13 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.ai import get_llm_provider
+from packages.ai.model_runs import build_model_run
 from packages.domain.models import (
     Document,
     DocumentClassification,
     DocumentIntegrityCheck,
     DocumentPage,
     EvidenceItem,
-    ModelRun,
     PageExtraction,
     ProcessingJob,
 )
@@ -322,9 +323,10 @@ async def stage_classify(session: AsyncSession, job: ProcessingJob, document: Do
         ).scalar_one_or_none()
         sample = (ext.text if ext else "") or ""
 
+    t0 = time.perf_counter()
     result = await llm.classify(filename=document.source_filename, sample_text=sample)
-    model_run = ModelRun(
-        id=uuid.uuid4(),
+    t1 = time.perf_counter()
+    model_run = build_model_run(
         tenant_id=job.tenant_id,
         case_id=job.case_id,
         document_id=document.id,
@@ -336,6 +338,7 @@ async def stage_classify(session: AsyncSession, job: ProcessingJob, document: Do
         schema_version=result.schema_version,
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
+        latency_ms=int((t1 - t0) * 1000),
     )
     session.add(model_run)
     await session.execute(
@@ -388,17 +391,18 @@ async def stage_ocr(session: AsyncSession, job: ProcessingJob, document: Documen
                 image_bytes = storage.get_bytes(uri[len("fs://") :])
 
         force_vision = page.ocr_route == "vision"
+        t0 = time.perf_counter()
         result = await llm.extract_page(
             page_number=page.page_number,
             text_layer=text_layer,
             image_bytes=image_bytes,
             force_vision=force_vision,
         )
+        t1 = time.perf_counter()
 
         model_run_id = None
         if result.provider not in ("digital_text",):
-            model_run = ModelRun(
-                id=uuid.uuid4(),
+            model_run = build_model_run(
                 tenant_id=job.tenant_id,
                 case_id=job.case_id,
                 document_id=document.id,
@@ -410,6 +414,7 @@ async def stage_ocr(session: AsyncSession, job: ProcessingJob, document: Documen
                 schema_version=result.schema_version,
                 input_tokens=result.input_tokens,
                 output_tokens=result.output_tokens,
+                latency_ms=int((t1 - t0) * 1000),
             )
             session.add(model_run)
             await session.flush()

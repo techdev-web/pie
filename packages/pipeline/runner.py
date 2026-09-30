@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
@@ -9,38 +10,42 @@ from typing import Awaitable, Callable
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from packages.config import get_settings
 from packages.domain.models import Document, ProcessingJob, ProcessingStageRun
-from packages.observability import get_logger
-from packages.pipeline import stages
+from packages.observability import bind_pipeline_context, get_logger, pipeline_context
 from packages.pipeline import extraction as extraction_stage
 from packages.pipeline import indexing as indexing_stage
+from packages.pipeline import stages
+from packages.pipeline.versions import EVIDENCE_COMPLETE_STAGE, STAGE_VERSIONS
 
 log = get_logger("pipeline")
 
 StageFn = Callable[[AsyncSession, ProcessingJob, Document], Awaitable[None]]
 
+_STAGE_FNS: dict[str, StageFn] = {
+    "integrity": stages.stage_integrity,
+    "page_split": stages.stage_page_split,
+    "page_quality": stages.stage_page_quality,
+    "classify": stages.stage_classify,
+    "ocr": stages.stage_ocr,
+    "evidence_persist": stages.stage_evidence_persist,
+    "structured_extract": extraction_stage.stage_structured_extract,
+    "index_embeddings": indexing_stage.stage_index_embeddings,
+}
+
+# Built from centralized versions so prompt bumps re-run selectively
 STAGE_SEQUENCE: list[tuple[str, str, str, str, StageFn]] = [
-    # name, stage_version, model_version, prompt_version, fn
-    ("integrity", "1", "", "", stages.stage_integrity),
-    ("page_split", "1", "", "", stages.stage_page_split),
-    ("page_quality", "1", "", "", stages.stage_page_quality),
-    ("classify", "1", "mock-or-gemini", "document_classify:1", stages.stage_classify),
-    ("ocr", "1", "mock-or-gemini", "page_ocr:1", stages.stage_ocr),
-    ("evidence_persist", "1", "", "", stages.stage_evidence_persist),
-    (
+    (name, *STAGE_VERSIONS[name], _STAGE_FNS[name])
+    for name in (
+        "integrity",
+        "page_split",
+        "page_quality",
+        "classify",
+        "ocr",
+        "evidence_persist",
         "structured_extract",
-        "1",
-        "mock-or-gemini",
-        "structured_extract:1",
-        extraction_stage.stage_structured_extract,
-    ),
-    (
         "index_embeddings",
-        "1",
-        "mock-or-gemini-embed",
-        "embed:1",
-        indexing_stage.stage_index_embeddings,
-    ),
+    )
 ]
 
 
@@ -112,7 +117,6 @@ async def run_stage(
         await session.commit()
     except Exception:
         await session.rollback()
-        # Concurrent job may have succeeded meanwhile
         existing = await _already_succeeded(
             session,
             document_hash=document.content_hash,
@@ -126,9 +130,16 @@ async def run_stage(
             return
         raise
 
+    timeout = get_settings().stage_timeout_seconds
+    bind_pipeline_context(
+        tenant_id=str(job.tenant_id),
+        case_id=str(job.case_id) if job.case_id else None,
+        document_id=str(document.id),
+        job_id=str(job.id),
+        stage=stage_name,
+    )
     try:
-        await fn(session, job, document)
-        # refresh run in case session state changed
+        await asyncio.wait_for(fn(session, job, document), timeout=timeout)
         run = await session.get(ProcessingStageRun, run.id)
         if run is None:
             return
@@ -141,11 +152,18 @@ async def run_stage(
         run = await session.get(ProcessingStageRun, run.id)
         if run is not None:
             run.status = "failed"
-            run.error_message = str(exc)[:2000]
+            msg = str(exc)
+            if isinstance(exc, asyncio.TimeoutError):
+                msg = f"stage timeout after {timeout}s"
+            run.error_message = msg[:2000]
             run.finished_at = datetime.now(timezone.utc)
             await session.commit()
         log.exception("stage_failed", stage=stage_name, error=str(exc))
         raise
+
+
+def _evidence_completed(succeeded_stages: set[str]) -> bool:
+    return EVIDENCE_COMPLETE_STAGE in succeeded_stages
 
 
 async def run_document_pipeline(session: AsyncSession, job_id: uuid.UUID) -> None:
@@ -161,28 +179,49 @@ async def run_document_pipeline(session: AsyncSession, job_id: uuid.UUID) -> Non
     job.started_at = datetime.now(timezone.utc)
     await session.commit()
 
-    try:
-        for name, stage_version, model_version, prompt_version, fn in STAGE_SEQUENCE:
-            await run_stage(
-                session,
-                job,
-                document,
-                name,
-                stage_version,
-                model_version,
-                prompt_version,
-                fn,
-            )
-        job.status = "succeeded"
-        job.finished_at = datetime.now(timezone.utc)
-        await session.commit()
-        log.info("job_succeeded", job_id=str(job_id))
-    except Exception as exc:
-        job.status = "failed"
-        job.error_message = str(exc)[:2000]
-        job.finished_at = datetime.now(timezone.utc)
-        await session.commit()
-        raise
+    succeeded: set[str] = set()
+    with pipeline_context(
+        tenant_id=str(job.tenant_id),
+        case_id=str(job.case_id) if job.case_id else None,
+        document_id=str(document.id),
+        job_id=str(job_id),
+    ):
+        try:
+            for name, stage_version, model_version, prompt_version, fn in STAGE_SEQUENCE:
+                await run_stage(
+                    session,
+                    job,
+                    document,
+                    name,
+                    stage_version,
+                    model_version,
+                    prompt_version,
+                    fn,
+                )
+                succeeded.add(name)
+            job.status = "succeeded"
+            job.finished_at = datetime.now(timezone.utc)
+            await session.commit()
+            log.info("job_succeeded", job_id=str(job_id))
+        except Exception as exc:
+            # Partial success: keep evidence even if later AI stages fail
+            if _evidence_completed(succeeded):
+                job.status = "partial"
+                job.error_message = f"partial after evidence: {exc}"[:2000]
+                job.finished_at = datetime.now(timezone.utc)
+                await session.commit()
+                log.warning(
+                    "job_partial",
+                    job_id=str(job_id),
+                    succeeded=sorted(succeeded),
+                    error=str(exc),
+                )
+                return
+            job.status = "failed"
+            job.error_message = str(exc)[:2000]
+            job.finished_at = datetime.now(timezone.utc)
+            await session.commit()
+            raise
 
 
 async def run_document_pipeline_with_reconcile(
@@ -192,8 +231,7 @@ async def run_document_pipeline_with_reconcile(
     job = await session.get(ProcessingJob, job_id)
     case_id = job.case_id if job else None
     await run_document_pipeline(session, job_id)
-    # Re-check success
     job = await session.get(ProcessingJob, job_id)
-    if job and job.status == "succeeded":
+    if job and job.status in ("succeeded", "partial"):
         return case_id
     return None

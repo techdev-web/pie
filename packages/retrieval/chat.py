@@ -51,7 +51,14 @@ async def answer_case_question(
     # Deterministic synthesis for core query classes (truth layer, not raw OCR alone)
     draft = _deterministic_answer(pack, memory_summary=memory.summary_text if memory else None)
     if draft is None:
-        draft = await _llm_synthesize(pack, message=message, memory=memory)
+        draft = await _llm_synthesize(
+            pack,
+            message=message,
+            memory=memory,
+            session=session,
+            tenant_id=tenant_id,
+            case_id=case_id,
+        )
 
     evidence_out = _evidence_contract(pack.hits)
     snippets = [e["snippet"] for e in evidence_out]
@@ -357,10 +364,15 @@ def _fact_value(hit: RetrievalHit) -> str:
 
 
 async def _llm_synthesize(
-    pack: RetrievalPack, *, message: str, memory: Any
+    pack: RetrievalPack, *, message: str, memory: Any, session: AsyncSession | None = None,
+    tenant_id: uuid.UUID | None = None, case_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
+    import time
+
+    from packages.ai.model_runs import build_model_run
+    from packages.ai.routing import answer_status_for_human_route, route_for_stage, RouteEngine
+
     provider = get_llm_provider()
-    # Prefer provider.chat_synthesize if present; else build from packed context deterministically
     packed = {
         "query": message,
         "query_class": pack.analysis.query_class,
@@ -381,10 +393,44 @@ async def _llm_synthesize(
         "missing_evidence": pack.missing_evidence,
         "memory_summary": getattr(memory, "summary_text", None),
     }
+    route = route_for_stage(
+        "chat",
+        risk_signals={
+            "conflicts": bool(pack.open_conflicts),
+            "query_class": pack.analysis.query_class,
+        },
+    )
+    if route == RouteEngine.HUMAN:
+        return {
+            "answer": (
+                "Material unresolved risk requires human review before a "
+                "confident answer can be given."
+            ),
+            "status": answer_status_for_human_route(),
+            "open_questions": ["Escalate to analyst review"],
+        }
+
     synthesize = getattr(provider, "synthesize_answer", None)
     if synthesize is not None:
         try:
+            t0 = time.perf_counter()
             result = await synthesize(system=CHAT_SYSTEM, packed_context=packed)
+            t1 = time.perf_counter()
+            if session is not None and tenant_id is not None:
+                model = str(result.get("model") or "unknown") if isinstance(result, dict) else "unknown"
+                session.add(
+                    build_model_run(
+                        tenant_id=tenant_id,
+                        case_id=case_id,
+                        stage="chat",
+                        prompt_id="case_chat",
+                        prompt_version="1",
+                        model=model,
+                        input_tokens=result.get("input_tokens") if isinstance(result, dict) else None,
+                        output_tokens=result.get("output_tokens") if isinstance(result, dict) else None,
+                        latency_ms=int((t1 - t0) * 1000),
+                    )
+                )
             if isinstance(result, dict) and result.get("answer"):
                 return {
                     "answer": str(result["answer"]),
@@ -393,6 +439,14 @@ async def _llm_synthesize(
                 }
         except Exception as exc:
             log.warning("llm_synthesize_failed", error=str(exc))
+            return {
+                "answer": (
+                    "AI synthesis failed; refusing to invent an answer. "
+                    "See retrieved evidence below or escalate to review."
+                ),
+                "status": "INSUFFICIENT_EVIDENCE",
+                "open_questions": ["Retry chat or escalate to human review"],
+            }
 
     # Fallback: stitch from top hits without inventing
     if not pack.hits:

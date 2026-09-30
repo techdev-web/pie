@@ -1,9 +1,10 @@
-"""SQLAlchemy models for Phase 0–7."""
+"""SQLAlchemy models for Phase 0–8."""
 
 from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
@@ -14,6 +15,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -334,9 +336,16 @@ class ModelRun(Base):
     schema_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
     input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    __table_args__ = (Index("ix_model_runs_tenant_id", "tenant_id"),)
+    __table_args__ = (
+        Index("ix_model_runs_tenant_id", "tenant_id"),
+        Index("ix_model_runs_case_id", "case_id"),
+        Index("ix_model_runs_case_created", "case_id", "created_at"),
+    )
 
 
 class EvidenceItem(Base):
@@ -1191,3 +1200,72 @@ class ReportArtifact(Base):
         Index("ix_report_artifacts_tenant_status", "tenant_id", "status"),
         Index("ix_report_artifacts_truth_fp", "case_id", "truth_fingerprint"),
     )
+
+
+# --- Phase 8 ---
+
+
+class CostBudget(Base):
+    __tablename__ = "cost_budgets"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    budget_usd: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    alert_threshold_pct: Mapped[int] = mapped_column(Integer, default=80, nullable=False)
+    spent_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), default=Decimal("0"), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="OK", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "period_start", name="uq_cost_budgets_tenant_period"),
+        Index("ix_cost_budgets_tenant_id", "tenant_id"),
+        Index("ix_cost_budgets_tenant_status", "tenant_id", "status"),
+    )
+
+
+class EvalRun(Base):
+    __tablename__ = "eval_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    eval_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    pack_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    processing_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    git_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="running", nullable=False)
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    gate_passed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    results: Mapped[list[EvalCaseResult]] = relationship(back_populates="eval_run")
+
+    __table_args__ = (
+        Index("ix_eval_runs_pack_name", "pack_name"),
+        Index("ix_eval_runs_created", "created_at"),
+    )
+
+
+class EvalCaseResult(Base):
+    __tablename__ = "eval_case_results"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    eval_run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("eval_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    fixture_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    passed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    expected: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    actual: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    diffs: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    eval_run: Mapped[EvalRun] = relationship(back_populates="results")
+
+    __table_args__ = (Index("ix_eval_case_results_run_id", "eval_run_id"),)

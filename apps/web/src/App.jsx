@@ -61,6 +61,7 @@ export default function App() {
   const [decideBusy, setDecideBusy] = useState(null);
   const [report, setReport] = useState(null);
   const [reportBusy, setReportBusy] = useState(false);
+  const [opsSummary, setOpsSummary] = useState(null);
 
   const saveKey = () => {
     localStorage.setItem("pie_api_key", apiKey);
@@ -72,10 +73,6 @@ export default function App() {
     const data = await api("/v1/cases", { apiKey });
     setCases(data);
   }, [apiKey]);
-
-  useEffect(() => {
-    refreshCases().catch((e) => setError(String(e.message || e)));
-  }, [refreshCases]);
 
   const createCase = async () => {
     setError("");
@@ -160,6 +157,39 @@ export default function App() {
     },
     [apiKey]
   );
+
+  const loadOps = useCallback(async () => {
+    try {
+      const data = await api("/v1/ops/summary", { apiKey });
+      setOpsSummary(data);
+    } catch {
+      setOpsSummary(null);
+    }
+  }, [apiKey]);
+
+  useEffect(() => {
+    refreshCases().catch((e) => setError(String(e.message || e)));
+    loadOps().catch(() => {});
+  }, [refreshCases, loadOps]);
+
+  const runReprocess = async (mode = "delta") => {
+    if (!selectedCase) return;
+    setError("");
+    setStatus(`Reprocess (${mode})…`);
+    try {
+      const res = await api(`/v1/cases/${selectedCase}/reprocess`, {
+        apiKey,
+        method: "POST",
+        body: { mode, force: mode === "prompt_bump" },
+      });
+      setStatus(
+        `Reprocess queued · ${res.job_ids?.length || 0} jobs · invalidated ${res.invalidated_stage_runs || 0}`
+      );
+      await loadOps();
+    } catch (e) {
+      setError(e.message || String(e));
+    }
+  };
 
   const runAnalyze = async () => {
     if (!selectedCase) return;
@@ -747,6 +777,62 @@ export default function App() {
                   </div>
                 )}
               </div>
+            )}
+          </div>
+
+          <div className="panel">
+            <div className="row">
+              <h3 style={{ margin: 0, flex: 1 }}>Ops</h3>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => loadOps().catch(() => {})}
+              >
+                Refresh
+              </button>
+              {selectedCase && (
+                <>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => runReprocess("delta").catch((e) => setError(e.message))}
+                  >
+                    Reprocess delta
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() =>
+                      runReprocess("prompt_bump").catch((e) => setError(e.message))
+                    }
+                  >
+                    Prompt bump
+                  </button>
+                </>
+              )}
+            </div>
+            {opsSummary ? (
+              <div className="status" style={{ marginTop: "0.5rem" }}>
+                <div>
+                  Budget:{" "}
+                  <span className="pill">{opsSummary.budget?.status}</span>{" "}
+                  ${Number(opsSummary.budget?.spent_usd || 0).toFixed(4)} / $
+                  {Number(opsSummary.budget?.budget_usd || 0).toFixed(2)}
+                </div>
+                <div>
+                  Review backlog: {opsSummary.review_backlog?.open_count ?? "—"} · Verified
+                  fact ratio:{" "}
+                  {opsSummary.verified_fact_ratio?.ratio != null
+                    ? `${(opsSummary.verified_fact_ratio.ratio * 100).toFixed(0)}%`
+                    : "—"}
+                </div>
+                <div>
+                  Cases with cost: {opsSummary.cost_per_case?.length ?? 0} · OCR samples:{" "}
+                  {opsSummary.ocr_confidence?.count ?? 0}
+                </div>
+              </div>
+            ) : (
+              <p className="status">Ops summary unavailable.</p>
             )}
           </div>
 

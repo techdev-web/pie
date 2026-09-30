@@ -678,9 +678,9 @@ Dashboards: cost per case, stage latency, OCR confidence distributions, review b
 
 ### 8.6 Exit checklist
 
-- [ ] Cost budget alerts per tenant.  
-- [ ] Golden pack CI.  
-- [ ] Reprocess docs after prompt vN without full corpus downtime.
+- [x] Cost budget alerts per tenant.  
+- [x] Golden pack CI.  
+- [x] Reprocess docs after prompt vN without full corpus downtime.
 
 ------------------------------------------------------------------------
 

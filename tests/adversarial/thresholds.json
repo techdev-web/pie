@@ -1,0 +1,6 @@
+{
+  "min_citation_precision": 0.8,
+  "min_conflict_recall": 0.5,
+  "max_hallucination_rate": 0.3,
+  "min_fact_f1": 0.3
+}

@@ -1,0 +1,42 @@
+{
+  "doc_type": "sale_deed",
+  "filename": "conflict_pack.json",
+  "skip_extract": true,
+  "use_expected_conflicts": true,
+  "actual_facts": [
+    {
+      "fact_type": "party.seller",
+      "value_text": "Ram Kumar",
+      "evidence_ids": ["ev_a"],
+      "requires_citation": true
+    },
+    {
+      "fact_type": "party.seller",
+      "value_text": "Shyam Kumar",
+      "evidence_ids": ["ev_b"],
+      "requires_citation": true
+    }
+  ],
+  "actual_conflicts": [
+    {
+      "conflict_type": "OWNER_NAME_CONFLICT",
+      "status": "OPEN",
+      "summary": "Ram Kumar vs Shyam Kumar"
+    }
+  ],
+  "evidence_pages": [
+    {"page_number": 1, "evidence_id": "ev_a", "text": "Seller Ram Kumar Gata 183/2"},
+    {"page_number": 1, "evidence_id": "ev_b", "text": "Seller Shyam Kumar Gata 183/2"}
+  ],
+  "expected": {
+    "facts": [
+      {"fact_type": "party.seller", "value_text": "Ram Kumar"},
+      {"fact_type": "party.seller", "value_text": "Shyam Kumar"}
+    ],
+    "conflict_types": ["OWNER_NAME_CONFLICT"],
+    "conflicts": [
+      {"conflict_type": "OWNER_NAME_CONFLICT", "status": "OPEN"}
+    ],
+    "id_queries": [{"query": "gata 183/2", "expected_id": "183/2"}]
+  }
+}

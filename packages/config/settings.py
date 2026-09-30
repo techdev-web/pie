@@ -28,6 +28,20 @@ class Settings(BaseSettings):
     gemini_classify_model: str = "gemini-2.0-flash"
     gemini_ocr_model: str = "gemini-2.0-flash"
     gemini_chat_model: str = "gemini-2.0-flash"
+    gemini_pro_model: str = "gemini-2.0-pro"
+    gemini_embed_model: str = "text-embedding-004"
+
+    # USD per 1M tokens (input / output). Flash cheap; Pro costlier.
+    gemini_flash_input_per_mtok: float = 0.10
+    gemini_flash_output_per_mtok: float = 0.40
+    gemini_pro_input_per_mtok: float = 1.25
+    gemini_pro_output_per_mtok: float = 5.00
+    gemini_embed_per_mtok: float = 0.025
+
+    cost_budget_default_usd: float = 50.0
+    cost_budget_alert_threshold_pct: int = 80
+    stage_timeout_seconds: float = 120.0
+    worker_max_tries: int = 3
 
     pie_env: str = "development"
     api_host: str = "0.0.0.0"

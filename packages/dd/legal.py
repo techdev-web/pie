@@ -195,18 +195,25 @@ def build_legal_findings_layer1(
 
 
 def enrich_findings_layer2(findings: list[DraftLegalFinding]) -> list[DraftLegalFinding]:
-    """Layer 2: attach a short deterministic reasoning note (Pro slot for future Gemini).
+    """Layer 2: Pro-slot narrative notes (deterministic stub; Gemini Pro when wired).
 
     Keeps status/evidence from Layer 1 — never upgrades UNRESOLVED mortgage to clear.
+    Routed as PRO via packages.ai.routing for cost accounting when LLM is attached.
     """
+    from packages.ai.routing import RouteEngine, route_for_stage
+
+    route = route_for_stage("legal_layer2")
+    assert route == RouteEngine.PRO  # cost-aware: legal ambiguity → Pro, not Flash
+
     enriched: list[DraftLegalFinding] = []
     for f in findings:
         note = (
-            f"Layer-2 review of {f.category}: {f.statement} "
+            f"Layer-2 ({route.value}) review of {f.category}: {f.statement} "
             f"Status remains {f.status}."
         )
         details = dict(f.details or {})
         details["layer2_note"] = note
+        details["layer2_route"] = route.value
         # Preserve UNRESOLVED for encumbrances — never invent "clear"
         if f.category == "ENCUMBRANCE" and f.status == "UNRESOLVED":
             details["title_clear"] = False

@@ -1,0 +1,43 @@
+{
+  "doc_type": "sale_deed",
+  "filename": "dual_survey.pdf",
+  "skip_extract": true,
+  "actual_facts": [
+    {
+      "fact_type": "parcel.survey_number",
+      "value_text": "183/2",
+      "evidence_ids": ["ev_1"],
+      "requires_citation": true
+    },
+    {
+      "fact_type": "parcel.survey_number",
+      "value_text": "184/1",
+      "evidence_ids": ["ev_2"],
+      "requires_citation": true
+    }
+  ],
+  "actual_conflicts": [
+    {
+      "conflict_type": "SURVEY_NUMBER_CONFLICT",
+      "status": "OPEN",
+      "summary": "183/2 vs 184/1"
+    }
+  ],
+  "evidence_pages": [
+    {"page_number": 1, "evidence_id": "ev_1", "text": "Gata No. 183/2"},
+    {"page_number": 2, "evidence_id": "ev_2", "text": "Gata No. 184/1"}
+  ],
+  "expected": {
+    "facts": [
+      {"fact_type": "parcel.survey_number", "value_text": "183/2"},
+      {"fact_type": "parcel.survey_number", "value_text": "184/1"}
+    ],
+    "conflict_types": ["SURVEY_NUMBER_CONFLICT"],
+    "conflicts": [{"conflict_type": "SURVEY_NUMBER_CONFLICT"}],
+    "id_queries": [
+      {"query": "183/2", "expected_id": "183/2"},
+      {"query": "184/1", "expected_id": "184/1"}
+    ]
+  },
+  "use_expected_conflicts": true
+}

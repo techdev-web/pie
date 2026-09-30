@@ -88,10 +88,32 @@ async def index_case_embeddings(
 
     created = 0
     updated = 0
+    import time
+
+    from packages.ai.model_runs import build_model_run
+    from packages.config import get_settings
+
+    settings = get_settings()
     for i in range(0, len(items), BATCH):
         batch = items[i : i + BATCH]
         to_embed = [t for *_, t in batch]
+        t0 = time.perf_counter()
         vectors = await provider.embed(to_embed)
+        t1 = time.perf_counter()
+        session.add(
+            build_model_run(
+                tenant_id=tenant_id,
+                case_id=case_id,
+                document_id=document_id,
+                stage="embed",
+                prompt_id="embed",
+                prompt_version="1",
+                model=getattr(settings, "gemini_embed_model", EMBEDDING_MODEL),
+                input_tokens=sum(max(1, len(t) // 4) for t in to_embed),
+                output_tokens=0,
+                latency_ms=int((t1 - t0) * 1000),
+            )
+        )
         for (source_type, source_id, doc_id, text), vec in zip(batch, vectors):
             key = (source_type, source_id)
             norm = normalize_text(text)

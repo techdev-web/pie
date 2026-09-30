@@ -528,3 +528,56 @@ class ReportExportOut(BaseModel):
     created_at: datetime
     title: str
 
+
+# --- Phase 8 ---
+
+
+class ReprocessRequest(BaseModel):
+    mode: str = Field(default="delta", description="delta | prompt_bump")
+    stages: list[str] | None = None
+    force: bool = False
+
+
+class ReprocessResponse(BaseModel):
+    mode: str
+    force: bool = False
+    stages: list[str] = Field(default_factory=list)
+    document_ids: list[str] = Field(default_factory=list)
+    job_ids: list[uuid.UUID] = Field(default_factory=list)
+    invalidated_stage_runs: int = 0
+    status: str = "queued"
+
+
+class OpsSummaryOut(BaseModel):
+    generated_at: str
+    cost_per_case: list[dict[str, Any]] = Field(default_factory=list)
+    stage_latency: dict[str, Any] = Field(default_factory=dict)
+    ocr_confidence: dict[str, Any] = Field(default_factory=dict)
+    review_backlog: dict[str, Any] = Field(default_factory=dict)
+    verified_fact_ratio: dict[str, Any] = Field(default_factory=dict)
+    budget: dict[str, Any] = Field(default_factory=dict)
+
+
+class CostBudgetOut(BaseModel):
+    period_start: str
+    period_end: str
+    budget_usd: float
+    spent_usd: float
+    alert_threshold_pct: int
+    status: str
+    cost_per_case: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class EvalRunRequest(BaseModel):
+    pack_name: str = "golden"
+    persist: bool = True
+
+
+class EvalRunOut(BaseModel):
+    eval_id: str
+    pack_name: str
+    status: str
+    gate_passed: bool | None = None
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    details: dict[str, Any] | None = None
+

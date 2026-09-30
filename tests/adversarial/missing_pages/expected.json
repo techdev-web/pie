@@ -1,0 +1,29 @@
+{
+  "doc_type": "sale_deed",
+  "filename": "missing_pages.pdf",
+  "skip_extract": true,
+  "actual_facts": [
+    {
+      "fact_type": "party.seller",
+      "value_text": null,
+      "verification_state": "NOT_FOUND",
+      "evidence_ids": [],
+      "requires_citation": false
+    }
+  ],
+  "actual_conflicts": [],
+  "evidence_pages": [],
+  "expected": {
+    "facts": [
+      {"fact_type": "party.seller", "value_text": null, "verification_state": "NOT_FOUND"}
+    ],
+    "conflict_types": [],
+    "id_queries": []
+  },
+  "thresholds": {
+    "min_fact_f1": 0.0,
+    "min_citation_precision": 0.0,
+    "max_hallucination_rate": 1.0,
+    "min_conflict_recall": 0.0
+  }
+}

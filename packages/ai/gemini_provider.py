@@ -68,6 +68,9 @@ class GeminiProvider:
         self.client = genai.Client(api_key=settings.gemini_api_key)
         self.classify_model = settings.gemini_classify_model
         self.ocr_model = settings.gemini_ocr_model
+        self.chat_model = settings.gemini_chat_model
+        self.pro_model = settings.gemini_pro_model
+        self.embed_model = settings.gemini_embed_model
 
     def _parse_json(self, raw: str) -> dict[str, Any]:
         raw = raw.strip()
@@ -160,7 +163,7 @@ class GeminiProvider:
     async def embed(self, texts: list[str]) -> list[list[float]]:
         # Phase 4 RAG embeddings via Gemini
         result = self.client.models.embed_content(
-            model="text-embedding-004",
+            model=self.embed_model,
             contents=texts,
         )
         embeddings = getattr(result, "embeddings", None) or []
@@ -173,25 +176,52 @@ class GeminiProvider:
     async def synthesize_answer(
         self, *, system: str, packed_context: dict[str, Any]
     ) -> dict[str, Any]:
+        from packages.ai.routing import RouteEngine, route_for_stage, model_for_route
+
         prompt = (
             f"{system}\n\nPacked case context (JSON):\n"
             f"{json.dumps(packed_context, default=str)[:20000]}\n"
         )
-        # Escalate to Pro when conflicts / review likely
-        model = self.classify_model
-        if packed_context.get("conflicts") or packed_context.get("query_class") == "ownership":
-            # Prefer flash unless explicitly configured; Pro optional via settings later
-            model = getattr(self.settings, "gemini_chat_model", None) or self.classify_model
+        route = route_for_stage(
+            "chat",
+            risk_signals={
+                "conflicts": bool(packed_context.get("conflicts")),
+                "query_class": packed_context.get("query_class"),
+                "legal_ambiguity": bool(packed_context.get("legal_ambiguity")),
+                "material_unresolved_risk": bool(
+                    packed_context.get("material_unresolved_risk")
+                ),
+            },
+        )
+        if route == RouteEngine.HUMAN:
+            return {
+                "answer": (
+                    "Material unresolved risk requires human review before a "
+                    "confident answer can be given."
+                ),
+                "status": "INSUFFICIENT_EVIDENCE",
+                "open_questions": ["Escalate to analyst review"],
+                "model": "human",
+                "input_tokens": None,
+                "output_tokens": None,
+            }
+        model = model_for_route(route, stage="chat", settings=self.settings) or self.chat_model
+        if route == RouteEngine.PRO:
+            model = self.pro_model
         response = self.client.models.generate_content(
             model=model,
             contents=prompt,
             config={"temperature": 0.0},
         )
         data = self._parse_json(response.text or "{}")
+        usage = getattr(response, "usage_metadata", None)
         return {
             "answer": str(data.get("answer") or response.text or ""),
             "status": str(data.get("status") or "PARTIALLY_SUPPORTED"),
             "open_questions": list(data.get("open_questions") or []),
+            "model": model,
+            "input_tokens": getattr(usage, "prompt_token_count", None) if usage else None,
+            "output_tokens": getattr(usage, "candidates_token_count", None) if usage else None,
         }
 
     def _parse_structured(self, data: dict[str, Any], *, model: str, usage: Any) -> StructuredExtractResult:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 import uuid
 from typing import Any
 
@@ -9,6 +10,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.ai import get_llm_provider
+from packages.ai.model_runs import build_model_run
+from packages.ai.routing import fact_state_for_ai_failure
 from packages.ai.schemas import CandidateFactPayload
 from packages.domain.models import (
     Document,
@@ -16,7 +19,6 @@ from packages.domain.models import (
     EvidenceItem,
     Fact,
     FactEvidence,
-    ModelRun,
     OwnershipEvent,
     OwnershipEventParty,
     OwnershipShare,
@@ -170,14 +172,36 @@ async def stage_structured_extract(
         for ev in evidence_items
     ]
 
-    result = await llm.extract_structured(
-        doc_type=doc_type,
-        filename=document.source_filename,
-        evidence_pages=evidence_pages,
-    )
+    try:
+        t0 = time.perf_counter()
+        result = await llm.extract_structured(
+            doc_type=doc_type,
+            filename=document.source_filename,
+            evidence_pages=evidence_pages,
+        )
+        t1 = time.perf_counter()
+    except Exception as exc:
+        log.exception("structured_extract_ai_failed", error=str(exc))
+        # Keep evidence; mark a sentinel fact for human review — never silent fill-in
+        session.add(
+            Fact(
+                id=uuid.uuid4(),
+                fact_id=f"fact_{uuid.uuid4().hex[:12]}",
+                tenant_id=job.tenant_id,
+                case_id=job.case_id,
+                document_id=document.id,
+                fact_type="extraction.failure",
+                predicate="ai_failed",
+                value_text=str(exc)[:500],
+                verification_state=fact_state_for_ai_failure(),
+                confidence=0.0,
+                value_json={"error": str(exc)[:500]},
+            )
+        )
+        await session.commit()
+        raise
 
-    model_run = ModelRun(
-        id=uuid.uuid4(),
+    model_run = build_model_run(
         tenant_id=job.tenant_id,
         case_id=job.case_id,
         document_id=document.id,
@@ -189,6 +213,7 @@ async def stage_structured_extract(
         schema_version=result.schema_version,
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
+        latency_ms=int((t1 - t0) * 1000),
     )
     session.add(model_run)
     await session.flush()
