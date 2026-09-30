@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from packages.ai.provider import LLMProvider, get_llm_provider
 from packages.ai.schemas import StructuredExtractResult
 
@@ -14,44 +16,40 @@ class DocumentClassifier:
         return await self.provider.classify(filename=filename, sample_text=sample_text)
 
 
-class EntityExtractor:
+class _FocusedExtractor:
+    focus: str = "full"
+
+    def __init__(self, provider: LLMProvider | None = None) -> None:
+        self.provider = provider or get_llm_provider()
+
+    async def run(self, **kwargs: Any) -> StructuredExtractResult:
+        kwargs.setdefault("focus", self.focus)
+        return await self.provider.extract_structured(**kwargs)
+
+
+class EntityExtractor(_FocusedExtractor):
     """Extract persons/orgs from evidence text via structured extract."""
 
-    def __init__(self, provider: LLMProvider | None = None) -> None:
-        self.provider = provider or get_llm_provider()
-
-    async def run(self, **kwargs) -> StructuredExtractResult:
-        result = await self.provider.extract_structured(**kwargs)
-        return result
+    focus = "entities"
 
 
-class ParcelExtractor:
-    def __init__(self, provider: LLMProvider | None = None) -> None:
-        self.provider = provider or get_llm_provider()
-
-    async def run(self, **kwargs) -> StructuredExtractResult:
-        return await self.provider.extract_structured(**kwargs)
+class ParcelExtractor(_FocusedExtractor):
+    focus = "parcels"
 
 
-class TransactionExtractor:
-    def __init__(self, provider: LLMProvider | None = None) -> None:
-        self.provider = provider or get_llm_provider()
-
-    async def run(self, **kwargs) -> StructuredExtractResult:
-        return await self.provider.extract_structured(**kwargs)
+class TransactionExtractor(_FocusedExtractor):
+    focus = "transactions"
 
 
-class OwnershipEventExtractor:
-    def __init__(self, provider: LLMProvider | None = None) -> None:
-        self.provider = provider or get_llm_provider()
-
-    async def run(self, **kwargs) -> StructuredExtractResult:
-        return await self.provider.extract_structured(**kwargs)
+class OwnershipEventExtractor(_FocusedExtractor):
+    focus = "ownership"
 
 
-class EncumbranceExtractor:
-    def __init__(self, provider: LLMProvider | None = None) -> None:
-        self.provider = provider or get_llm_provider()
+class EncumbranceExtractor(_FocusedExtractor):
+    focus = "encumbrances"
 
-    async def run(self, **kwargs) -> StructuredExtractResult:
-        return await self.provider.extract_structured(**kwargs)
+
+class FullStructuredExtractor(_FocusedExtractor):
+    """Default pipeline extractor — one comprehensive pass."""
+
+    focus = "full"

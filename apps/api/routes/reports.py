@@ -81,7 +81,7 @@ async def analyze_case(
             id=uuid.uuid4(),
             tenant_id=auth.tenant_id,
             case_id=case_id,
-            actor=str(auth.api_key_id),
+            actor=auth.actor_label,
             action="case.analyze",
             resource_type="case",
             resource_id=str(case_id),
@@ -107,7 +107,7 @@ async def analyze_case(
                 tenant_id=auth.tenant_id,
                 triggered_by="analyze.sync",
                 rebuild_reason=f"analyze:{mode}",
-                actor=str(auth.api_key_id),
+                actor=auth.actor_label,
             )
             report_id = artifact.report_id
         return AnalyzeResponse(
@@ -160,7 +160,7 @@ async def analyze_case(
         case_id,
         force=force,
         generate_report=req.generate_report,
-        actor=str(auth.api_key_id),
+        actor=auth.actor_label,
     )
     return AnalyzeResponse(
         mode=mode,
@@ -204,7 +204,7 @@ async def get_case_report(
                 tenant_id=auth.tenant_id,
                 triggered_by="api.get_report",
                 rebuild_reason="api_regenerate" if regenerate else "missing_or_stale",
-                actor=str(auth.api_key_id),
+                actor=auth.actor_label,
             )
 
     assert artifact is not None
@@ -215,7 +215,7 @@ async def get_case_report(
             id=uuid.uuid4(),
             tenant_id=auth.tenant_id,
             case_id=case_id,
-            actor=str(auth.api_key_id),
+            actor=auth.actor_label,
             action="report.export",
             resource_type="report_artifact",
             resource_id=artifact.report_id,
@@ -275,10 +275,10 @@ async def generate_report_endpoint(
             tenant_id=auth.tenant_id,
             triggered_by="api.generate",
             rebuild_reason="manual",
-            actor=str(auth.api_key_id),
+            actor=auth.actor_label,
         )
         return _report_out(artifact)
-    await enqueue_generate_report(case_id, actor=str(auth.api_key_id))
+    await enqueue_generate_report(case_id, actor=auth.actor_label)
     return GenerateReportQueued(queued=True, case_id=case_id)
 
 

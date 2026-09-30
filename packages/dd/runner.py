@@ -140,7 +140,7 @@ async def run_domain_engines(
         ownership_gaps=chain.gaps,
         share_conflicts=shares.conflicts,
     )
-    legal_drafts = enrich_findings_layer2(layer1)
+    legal_drafts = await enrich_findings_layer2(layer1)
 
     geo_drafts: list[dict[str, Any]] = []
     geo_drafts.extend(survey.findings)

@@ -93,14 +93,16 @@ curl -s -X POST "http://localhost:8000/v1/cases/CASE_ID/reprocess" \
 
 - **API** (`apps/api`): cases, uploads, jobs, evidence/pages, facts, intelligence, chat/memory, review queue, risk/findings, analyze, reports, ops/costs, reprocess
 - **Worker** (`apps/worker`): arq consumer with retries; pipeline stages + reconciliation + reports
-- **Pipeline**: `integrity → page_split → page_quality → classify → ocr → evidence_persist → structured_extract → index_embeddings` (+ case `reconcile` → review sync → domain engines); versioned stages for selective reprocess
-- **Domain engines** (`packages/dd`): temporal ownership, share accounting, survey/parcel identity, area reconciliation, legal findings, versioned risk, multi-dimension confidence, GIS hooks
+- **Pipeline**: `integrity → page_split → page_quality → classify → ocr` (dual OCR on critical pages → `CONFLICTING_OCR` when A/B diverge) `→ evidence_persist → structured_extract → index_embeddings` (+ case `reconcile` → review sync → domain engines); versioned stages for selective reprocess
+- **Domain engines** (`packages/dd`): temporal ownership, share accounting, survey/parcel identity, area reconciliation, legal Layer-1 rules + Layer-2 Pro narrative (Gemini when keyed), versioned risk, multi-dimension confidence; **GIS / external registry still hooks only**
 - **Reports** (`packages/reports`): DD memo from verified truth layer (JSON + PDF); section-level reuse after review decisions
-- **Retrieval** (`packages/retrieval`): hybrid RAG + answer contract + guardrails + review decisions / compounding
+- **Retrieval** (`packages/retrieval`): hybrid RAG + **pgvector** (768-d) + answer contract + guardrails + review decisions / compounding
 - **Eval / ops** (`packages/eval`, `packages/ops`): golden/adversarial packs, citation/conflict gates, cost budgets, ops summary
 - **Storage**: MinIO (S3) or `STORAGE_BACKEND=fs` (paths prefixed `tenants/{tenant_id}/…`)
-- **AI**: Flash by default; Pro for ownership/legal ambiguity; `GeminiProvider` when `GEMINI_API_KEY` is set; otherwise `MockProvider`
-- **Auth**: API keys with scopes (`*` or granular); export actions audited; PII redacted in logs
+- **AI**: Flash by default; Pro for ownership/legal Layer-2; `GeminiProvider` when `GEMINI_API_KEY` is set; otherwise `MockProvider`
+- **Auth**: `users` linked to API keys / case members; scopes (`*` or granular); export actions audited; PII redacted in logs
+
+After upgrading past migration `010_pgvector`, recreate or re-index embeddings (`reprocess` / re-run `index_embeddings`) — prior JSONB vectors are wiped. Compose Postgres image is `pgvector/pgvector:pg16` (recreate the volume if you were on plain `postgres:16`).
 
 ## Tests
 
@@ -114,7 +116,7 @@ pytest tests/test_api.py -q
 
 **Phase 0:** upload PDF → stored immutably → job succeeds; duplicate hash dedupes; cross-tenant denied.
 
-**Phase 1:** every page yields evidence rows; integrity warnings persisted; re-run OCR with same versions skips; UI shows page + evidence highlight.
+**Phase 1:** every page yields evidence rows; integrity warnings persisted; re-run OCR with same versions skips; UI shows page + evidence highlight; critical pages run dual OCR and persist `CONFLICTING_OCR` when passes diverge.
 
 **Phase 2:** sale deed yields owner/buyer/seller/survey/area/date facts with evidence IDs; UI “Why?” opens cited pages; no EXTRACTED fact without an evidence link (NOT_FOUND allowed without links).
 

@@ -42,28 +42,39 @@ class MockProvider:
         text_layer: str | None,
         image_bytes: bytes | None,
         force_vision: bool = False,
+        pass_id: str = "ocr_a",
     ) -> PageExtractResult:
-        if text_layer and text_layer.strip() and not force_vision:
+        from packages.pipeline.ocr_dual import diverge_survey_in_text
+
+        if text_layer and text_layer.strip() and not force_vision and pass_id != "ocr_b":
             return PageExtractResult(
                 text=text_layer.strip(),
                 confidence=0.95,
                 provider="digital_text",
                 source_type="DIGITAL",
                 model="mock",
+                prompt_id="page_ocr",
+                prompt_version="2",
             )
-        mock_text = (
-            f"[mock OCR page {page_number}] "
-            "Gata No. 183/2 Village Example Seller Ram Kumar Buyer Sita Devi "
-            "Sale Deed dated 12/03/2020 Registration No. REG-1234 "
-            "Area 0.5 acre"
+        base = (
+            (text_layer or "").strip()
+            or (
+                f"[mock OCR page {page_number}] "
+                "Gata No. 183/2 Village Example Seller Ram Kumar Buyer Sita Devi "
+                "Sale Deed dated 12/03/2020 Registration No. REG-1234 "
+                "Area 0.5 acre"
+            )
         )
+        text = diverge_survey_in_text(base) if pass_id == "ocr_b" else base
         return PageExtractResult(
-            text=mock_text,
-            confidence=0.8,
-            provider="mock_vision",
+            text=text,
+            confidence=0.75 if pass_id == "ocr_b" else 0.8,
+            provider="mock_vision_b" if pass_id == "ocr_b" else "mock_vision",
             source_type="OCR",
             bbox=[0, 0, 100, 100],
             model="mock",
+            prompt_id="page_ocr_b" if pass_id == "ocr_b" else "page_ocr",
+            prompt_version="2",
         )
 
     async def extract_structured(
@@ -72,6 +83,7 @@ class MockProvider:
         doc_type: str,
         filename: str | None,
         evidence_pages: list[dict[str, Any]],
+        focus: str | None = None,
     ) -> StructuredExtractResult:
         combined = "\n".join(
             f"Page {p.get('page_number')}: {p.get('text', '')}" for p in evidence_pages
@@ -318,7 +330,20 @@ class MockProvider:
         )
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
-        return [[float(len(t) % 97) / 97.0] * 8 for t in texts]
+        # Match Gemini text-embedding-004 dimensionality (768) for pgvector.
+        out: list[list[float]] = []
+        for t in texts:
+            vec = [0.0] * 768
+            if not t:
+                out.append(vec)
+                continue
+            for i, ch in enumerate(t.encode("utf-8", errors="ignore")[:2048]):
+                idx = (ch * 31 + i * 17) % 768
+                vec[idx] += 1.0
+            # L2-normalize-ish scale
+            norm = sum(x * x for x in vec) ** 0.5 or 1.0
+            out.append([x / norm for x in vec])
+        return out
 
     async def synthesize_answer(
         self, *, system: str, packed_context: dict[str, Any]
@@ -351,4 +376,31 @@ class MockProvider:
             "model": "mock",
             "input_tokens": 10,
             "output_tokens": 20,
+        }
+
+    async def reason_legal_findings(
+        self, *, findings_payload: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        from packages.ai.routing import RouteEngine, route_for_stage
+
+        route = route_for_stage("legal_layer2")
+        assert route == RouteEngine.PRO
+        notes = []
+        for i, f in enumerate(findings_payload):
+            notes.append(
+                {
+                    "index": i,
+                    "note": (
+                        f"Layer-2 ({route.value}) review of {f.get('category')}: "
+                        f"{f.get('statement')} Status remains {f.get('status')}."
+                    ),
+                    "recommended_action": f.get("recommended_action"),
+                }
+            )
+        return {
+            "notes": notes,
+            "model": "mock-pro",
+            "route": route.value,
+            "input_tokens": 20,
+            "output_tokens": 40,
         }

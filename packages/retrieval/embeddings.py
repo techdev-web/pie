@@ -1,4 +1,4 @@
-"""Embedding index for evidence + facts (JSONB vectors; cosine in Python)."""
+"""Embedding index for evidence + facts (pgvector 768-d; cosine helpers for unit tests)."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from packages.observability import get_logger
 log = get_logger("retrieval.embeddings")
 
 EMBEDDING_MODEL = "mock-or-gemini-embed"
+EMBEDDING_DIMS = 768
 BATCH = 32
 
 
@@ -29,6 +30,14 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     if na == 0 or nb == 0:
         return 0.0
     return dot / (na * nb)
+
+
+def pad_or_trim_vector(vec: list[float], dims: int = EMBEDDING_DIMS) -> list[float]:
+    if len(vec) == dims:
+        return list(vec)
+    if len(vec) > dims:
+        return list(vec[:dims])
+    return list(vec) + [0.0] * (dims - len(vec))
 
 
 async def index_case_embeddings(
@@ -117,12 +126,13 @@ async def index_case_embeddings(
         for (source_type, source_id, doc_id, text), vec in zip(batch, vectors):
             key = (source_type, source_id)
             norm = normalize_text(text)
+            fixed = pad_or_trim_vector(list(vec))
             if key in by_key:
                 row = by_key[key]
                 row.content_text = text
                 row.content_normalized = norm
-                row.embedding = list(vec)
-                row.dims = len(vec)
+                row.embedding = fixed
+                row.dims = len(fixed)
                 row.document_id = doc_id
                 updated += 1
             else:
@@ -135,8 +145,8 @@ async def index_case_embeddings(
                     document_id=doc_id,
                     content_text=text,
                     content_normalized=norm,
-                    embedding=list(vec),
-                    dims=len(vec),
+                    embedding=fixed,
+                    dims=len(fixed),
                     model=EMBEDDING_MODEL,
                 )
                 session.add(row)

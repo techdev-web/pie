@@ -11,8 +11,8 @@ STAGE_VERSIONS: dict[str, tuple[str, str, str]] = {
     "page_split": ("1", "", ""),
     "page_quality": ("1", "", ""),
     "classify": ("1", "mock-or-gemini", "document_classify:1"),
-    "ocr": ("1", "mock-or-gemini", "page_ocr:1"),
-    "evidence_persist": ("1", "", ""),
+    "ocr": ("2", "mock-or-gemini", "page_ocr:2"),  # dual OCR on critical pages
+    "evidence_persist": ("2", "", ""),  # persists OCR-B evidence on CONFLICTING_OCR
     "structured_extract": ("1", "mock-or-gemini", "structured_extract:1"),
     "index_embeddings": ("1", "mock-or-gemini-embed", "embed:1"),
 }

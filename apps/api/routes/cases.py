@@ -41,6 +41,7 @@ async def create_case(
             id=uuid.uuid4(),
             case_id=case.id,
             tenant_id=auth.tenant_id,
+            user_id=auth.user_id,
             role="owner",
             label="api-key",
         )
@@ -50,7 +51,7 @@ async def create_case(
             id=uuid.uuid4(),
             tenant_id=auth.tenant_id,
             case_id=case.id,
-            actor=str(auth.api_key_id),
+            actor=auth.actor_label,
             action="case.create",
             resource_type="case",
             resource_id=str(case.id),
@@ -119,7 +120,7 @@ async def reprocess_case_endpoint(
             mode=body.mode,
             stages=body.stages,
             force=body.force,
-            actor=str(auth.api_key_id),
+            actor=auth.actor_label,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

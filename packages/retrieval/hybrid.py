@@ -24,7 +24,7 @@ from packages.domain.models import (
     ParcelIdentifier,
 )
 from packages.pipeline.normalization import normalize_identifier
-from packages.retrieval.embeddings import EMBEDDING_MODEL, cosine_similarity
+from packages.retrieval.embeddings import EMBEDDING_MODEL, cosine_similarity, pad_or_trim_vector
 from packages.retrieval.query import QueryAnalysis, classify_query
 
 __all__ = ["hybrid_retrieve", "RetrievalHit", "RetrievalPack"]
@@ -198,31 +198,55 @@ async def hybrid_retrieve(
                 )
             )
 
-    # --- Vector similarity ---
-    embeddings = list(
-        (
-            await session.execute(
-                select(Embedding).where(
-                    Embedding.case_id == case_id,
-                    Embedding.tenant_id == tenant_id,
-                    Embedding.model == EMBEDDING_MODEL,
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    if embeddings and analysis.raw.strip():
-        notes["paths"].append("vector")
+    # --- Vector similarity (pgvector cosine distance; Python fallback) ---
+    if analysis.raw.strip():
         provider = get_llm_provider()
-        qvec = (await provider.embed([analysis.raw]))[0]
-        scored: list[tuple[float, Embedding]] = []
-        for emb in embeddings:
-            sim = cosine_similarity(qvec, list(emb.embedding or []))
-            if sim > 0.15:
-                scored.append((sim, emb))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        for sim, emb in scored[:15]:
+        qvec = pad_or_trim_vector((await provider.embed([analysis.raw]))[0])
+        notes["paths"].append("vector")
+        try:
+            # Lower cosine_distance = more similar; convert to similarity ≈ 1 - distance
+            dist_expr = Embedding.embedding.cosine_distance(qvec)
+            rows = list(
+                (
+                    await session.execute(
+                        select(Embedding, dist_expr.label("dist"))
+                        .where(
+                            Embedding.case_id == case_id,
+                            Embedding.tenant_id == tenant_id,
+                            Embedding.model == EMBEDDING_MODEL,
+                        )
+                        .order_by(dist_expr)
+                        .limit(15)
+                    )
+                ).all()
+            )
+            scored = [(max(0.0, 1.0 - float(dist)), emb) for emb, dist in rows if dist is not None]
+        except Exception:
+            # Unit tests / non-pgvector backends: Python cosine
+            embeddings = list(
+                (
+                    await session.execute(
+                        select(Embedding).where(
+                            Embedding.case_id == case_id,
+                            Embedding.tenant_id == tenant_id,
+                            Embedding.model == EMBEDDING_MODEL,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            scored = []
+            for emb in embeddings:
+                sim = cosine_similarity(qvec, list(emb.embedding or []))
+                if sim > 0.15:
+                    scored.append((sim, emb))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            scored = scored[:15]
+
+        for sim, emb in scored:
+            if sim <= 0.15:
+                continue
             if emb.source_type == "fact":
                 fact = next((f for f in facts if f.id == emb.source_id), None)
                 if fact:

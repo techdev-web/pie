@@ -359,6 +359,8 @@ async def stage_classify(session: AsyncSession, job: ProcessingJob, document: Do
 
 
 async def stage_ocr(session: AsyncSession, job: ProcessingJob, document: Document) -> None:
+    from packages.pipeline.ocr_dual import is_critical_page_text, ocr_texts_diverge
+
     llm = get_llm_provider()
     storage = get_storage()
     pages = (
@@ -397,6 +399,7 @@ async def stage_ocr(session: AsyncSession, job: ProcessingJob, document: Documen
             text_layer=text_layer,
             image_bytes=image_bytes,
             force_vision=force_vision,
+            pass_id="ocr_a",
         )
         t1 = time.perf_counter()
 
@@ -420,11 +423,11 @@ async def stage_ocr(session: AsyncSession, job: ProcessingJob, document: Documen
             await session.flush()
             model_run_id = model_run.id
 
-        # remove prior ocr extractions for this page
+        # remove prior ocr / ocr_b extractions for this page
         await session.execute(
             delete(PageExtraction).where(
                 PageExtraction.page_id == page.id,
-                PageExtraction.extraction_type == "ocr",
+                PageExtraction.extraction_type.in_(("ocr", "ocr_b")),
             )
         )
         session.add(
@@ -441,6 +444,75 @@ async def stage_ocr(session: AsyncSession, job: ProcessingJob, document: Documen
                 extraction_version=EXTRACTION_VERSION,
             )
         )
+
+        # Dual OCR on critical pages (Architecture §10.2)
+        critical_probe = result.text or text_layer or ""
+        if is_critical_page_text(critical_probe):
+            t0b = time.perf_counter()
+            result_b = await llm.extract_page(
+                page_number=page.page_number,
+                text_layer=text_layer,
+                image_bytes=image_bytes,
+                force_vision=True,
+                pass_id="ocr_b",
+            )
+            t1b = time.perf_counter()
+            model_run_b_id = None
+            model_run_b = build_model_run(
+                tenant_id=job.tenant_id,
+                case_id=job.case_id,
+                document_id=document.id,
+                stage="ocr",
+                prompt_id=result_b.prompt_id,
+                prompt_version=result_b.prompt_version,
+                model=result_b.model,
+                temperature=result_b.temperature,
+                schema_version=result_b.schema_version,
+                input_tokens=result_b.input_tokens,
+                output_tokens=result_b.output_tokens,
+                latency_ms=int((t1b - t0b) * 1000),
+            )
+            session.add(model_run_b)
+            await session.flush()
+            model_run_b_id = model_run_b.id
+            session.add(
+                PageExtraction(
+                    id=uuid.uuid4(),
+                    document_id=document.id,
+                    page_id=page.id,
+                    tenant_id=document.tenant_id,
+                    extraction_type="ocr_b",
+                    text=result_b.text,
+                    provider=result_b.provider,
+                    confidence=result_b.confidence,
+                    model_run_id=model_run_b_id,
+                    extraction_version=EXTRACTION_VERSION,
+                )
+            )
+            if ocr_texts_diverge(result.text or "", result_b.text or ""):
+                session.add(
+                    DocumentIntegrityCheck(
+                        id=uuid.uuid4(),
+                        document_id=document.id,
+                        tenant_id=document.tenant_id,
+                        check_name="conflicting_ocr",
+                        status="WARNING",
+                        message=f"CONFLICTING_OCR on page {page.page_number}",
+                        details={
+                            "page_number": page.page_number,
+                            "status": "CONFLICTING_OCR",
+                            "ocr_a_provider": result.provider,
+                            "ocr_b_provider": result_b.provider,
+                            "ocr_a_preview": (result.text or "")[:200],
+                            "ocr_b_preview": (result_b.text or "")[:200],
+                        },
+                    )
+                )
+                log.info(
+                    "conflicting_ocr",
+                    document_id=str(document.id),
+                    page_number=page.page_number,
+                )
     await session.commit()
 
 
@@ -469,14 +541,17 @@ async def stage_evidence_persist(
 
     items: list[EvidenceItem] = []
     for page in pages:
-        ocr = (
+        extractions = (
             await session.execute(
                 select(PageExtraction).where(
                     PageExtraction.page_id == page.id,
-                    PageExtraction.extraction_type == "ocr",
+                    PageExtraction.extraction_type.in_(("ocr", "ocr_b")),
                 )
             )
-        ).scalar_one_or_none()
+        ).scalars().all()
+        by_type = {e.extraction_type: e for e in extractions}
+        ocr = by_type.get("ocr")
+        ocr_b = by_type.get("ocr_b")
         if ocr is None or not (ocr.text or "").strip():
             continue
 
@@ -500,6 +575,34 @@ async def stage_evidence_persist(
                 model_run_id=ocr.model_run_id,
             )
         )
+
+        # Persist OCR-B as separate evidence when present and divergent
+        if ocr_b is not None and (ocr_b.text or "").strip():
+            from packages.pipeline.ocr_dual import ocr_texts_diverge
+
+            if ocr_texts_diverge(text, ocr_b.text or ""):
+                text_b = ocr_b.text or ""
+                evidence_id_b = (
+                    f"ev_{sha256_bytes(f'{document.id}:{page.page_number}:b:{text_b[:200]}'.encode())[:20]}"
+                )
+                items.append(
+                    EvidenceItem(
+                        id=uuid.uuid4(),
+                        evidence_id=evidence_id_b,
+                        document_id=document.id,
+                        case_id=job.case_id,
+                        tenant_id=job.tenant_id,
+                        page_number=page.page_number,
+                        text=text_b,
+                        normalized_text=normalize_text(text_b),
+                        bbox=[0, 0, page.width or 0, page.height or 0] if page.width else None,
+                        source_type="OCR",
+                        ocr_provider=ocr_b.provider,
+                        ocr_confidence=ocr_b.confidence,
+                        extraction_version=EXTRACTION_VERSION,
+                        model_run_id=ocr_b.model_run_id,
+                    )
+                )
     session.add_all(items)
     await session.commit()
     log.info("evidence_persisted", document_id=str(document.id), count=len(items))

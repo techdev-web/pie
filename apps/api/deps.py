@@ -37,12 +37,19 @@ class AuthContext:
     tenant_id: uuid.UUID
     tenant: Tenant
     api_key_id: uuid.UUID
+    user_id: uuid.UUID | None = None
     scopes: list[str] = field(default_factory=lambda: ["*"])
 
     def has_scope(self, scope: str) -> bool:
         if "*" in self.scopes:
             return True
         return scope in self.scopes
+
+    @property
+    def actor_label(self) -> str:
+        if self.user_id is not None:
+            return f"user:{self.user_id}"
+        return f"key:{self.api_key_id}"
 
 
 async def bind_request_id(request: Request) -> str:
@@ -63,7 +70,7 @@ async def require_auth(
     result = await session.execute(
         select(ApiKey)
         .where(ApiKey.key_hash == key_hash, ApiKey.is_active.is_(True))
-        .options(selectinload(ApiKey.tenant))
+        .options(selectinload(ApiKey.tenant), selectinload(ApiKey.user))
     )
     api_key = result.scalar_one_or_none()
     if api_key is None:
@@ -76,6 +83,7 @@ async def require_auth(
         tenant_id=api_key.tenant_id,
         tenant=api_key.tenant,
         api_key_id=api_key.id,
+        user_id=api_key.user_id,
         scopes=scopes,
     )
 

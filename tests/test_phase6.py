@@ -6,6 +6,8 @@ import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import pytest
+
 from packages.dd.area import reconcile_areas
 from packages.dd.confidence import build_confidence_profiles
 from packages.dd.gis import assess_gis_hooks
@@ -95,7 +97,8 @@ def _conflict(**kwargs):
     return SimpleNamespace(**defaults)
 
 
-def test_mortgage_without_release_is_unresolved_not_clear():
+@pytest.mark.asyncio
+async def test_mortgage_without_release_is_unresolved_not_clear():
     mortgage = _fact()
     gap = _gap()
     findings = build_legal_findings_layer1(
@@ -110,10 +113,12 @@ def test_mortgage_without_release_is_unresolved_not_clear():
     assert "clear" not in enc.statement.lower() or "not clear" in enc.statement.lower()
     assert enc.details.get("clear_title_claimed") is False
 
-    layer2 = enrich_findings_layer2(findings)
+    layer2 = await enrich_findings_layer2(findings)
     enc2 = next(f for f in layer2 if f.category == "ENCUMBRANCE")
     assert enc2.status == "UNRESOLVED"
     assert enc2.details.get("title_clear") is False
+    assert enc2.details.get("layer2_route") == "pro"
+    assert enc2.details.get("layer2_note")
 
 
 def test_risk_panel_lists_unresolved_mortgage_and_owner_conflict():

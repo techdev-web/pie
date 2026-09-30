@@ -194,42 +194,73 @@ def build_legal_findings_layer1(
     return findings
 
 
-def enrich_findings_layer2(findings: list[DraftLegalFinding]) -> list[DraftLegalFinding]:
-    """Layer 2: Pro-slot narrative notes (deterministic stub; Gemini Pro when wired).
+async def enrich_findings_layer2(
+    findings: list[DraftLegalFinding],
+    *,
+    provider: Any | None = None,
+) -> list[DraftLegalFinding]:
+    """Layer 2: Pro-routed narrative notes via LLM (Mock when no Gemini key).
 
     Keeps status/evidence from Layer 1 — never upgrades UNRESOLVED mortgage to clear.
-    Routed as PRO via packages.ai.routing for cost accounting when LLM is attached.
     """
+    from packages.ai.provider import get_llm_provider
     from packages.ai.routing import RouteEngine, route_for_stage
 
     route = route_for_stage("legal_layer2")
     assert route == RouteEngine.PRO  # cost-aware: legal ambiguity → Pro, not Flash
 
+    llm = provider or get_llm_provider()
+    payload = [f.to_dict() for f in findings]
+    raw = await llm.reason_legal_findings(findings_payload=payload)
+    notes_by_index: dict[int, dict[str, Any]] = {}
+    for n in raw.get("notes") or []:
+        try:
+            idx = int(n.get("index"))
+        except (TypeError, ValueError):
+            continue
+        notes_by_index[idx] = n
+
     enriched: list[DraftLegalFinding] = []
-    for f in findings:
-        note = (
+    for i, f in enumerate(findings):
+        note_obj = notes_by_index.get(i) or {}
+        note = note_obj.get("note") or (
             f"Layer-2 ({route.value}) review of {f.category}: {f.statement} "
             f"Status remains {f.status}."
         )
         details = dict(f.details or {})
-        details["layer2_note"] = note
-        details["layer2_route"] = route.value
+        details["layer2_note"] = str(note)
+        details["layer2_route"] = raw.get("route") or route.value
+        details["layer2_model"] = raw.get("model")
         # Preserve UNRESOLVED for encumbrances — never invent "clear"
         if f.category == "ENCUMBRANCE" and f.status == "UNRESOLVED":
             details["title_clear"] = False
+            # Strip any model attempt to claim clearance
+            if "clear" in str(note).lower() and "not clear" not in str(note).lower():
+                details["layer2_note"] = (
+                    f"Layer-2 ({route.value}) review of {f.category}: {f.statement} "
+                    f"Status remains UNRESOLVED — release not evidenced."
+                )
+
+        recommended = f.recommended_action
+        model_action = note_obj.get("recommended_action")
+        if model_action and not (
+            f.category == "ENCUMBRANCE" and f.status == "UNRESOLVED" and "clear" in str(model_action).lower()
+        ):
+            recommended = str(model_action)
+
         enriched.append(
             DraftLegalFinding(
                 category=f.category,
                 severity=f.severity,
                 statement=f.statement,
-                status=f.status,
+                status=f.status,  # Layer-1 status wins
                 layer="reason",
                 evidence_ids=list(f.evidence_ids),
                 related_fact_ids=list(f.related_fact_ids),
                 related_conflict_id=f.related_conflict_id,
                 related_gap_id=f.related_gap_id,
                 missing_evidence=list(f.missing_evidence),
-                recommended_action=f.recommended_action,
+                recommended_action=recommended,
                 details=details,
             )
         )

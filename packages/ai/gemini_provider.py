@@ -35,6 +35,34 @@ Preserve identifiers (survey/gata/khata/registration numbers) exactly.
 Do not invent text that is not visible.
 """
 
+OCR_B_PROMPT = """Independent second-pass OCR for critical diligence fields.
+Return ONLY valid JSON with keys: text (string), confidence (0-1 float).
+Re-read survey/gata/khata numbers, owner names, area, consideration, registration, mortgage, and dates carefully.
+Do not copy a prior extraction — read the image independently.
+Do not invent text that is not visible.
+"""
+
+FOCUS_PREAMBLES = {
+    "entities": "Focus on persons/parties (sellers, buyers, owners, donors) and their identifiers.",
+    "parcels": "Focus on parcel identifiers (gata/survey/khata), village, and area.",
+    "transactions": "Focus on transaction dates, registration numbers, consideration, and deed type.",
+    "ownership": "Focus on ownership events, transfers, shares, and chronology cues.",
+    "encumbrances": "Focus on mortgages, charges, releases, and encumbrance status.",
+    "full": "Extract all candidate facts comprehensively.",
+}
+
+LEGAL_LAYER2_PROMPT = """You are a title diligence legal reasoning assistant (Layer 2).
+Given Layer-1 legal findings (JSON), add short narrative notes explaining why each finding matters.
+Return ONLY valid JSON:
+{"notes": [{"index": int, "note": str, "recommended_action": str|null}]}
+
+Hard rules:
+- Never upgrade an UNRESOLVED encumbrance/mortgage to clear or released.
+- Never invent a release deed or clearance that is not in the findings.
+- Keep Layer-1 status authoritative; notes must not contradict status.
+- Do not invent new findings; only annotate the supplied list.
+"""
+
 STRUCTURED_EXTRACT_PROMPT = """You extract candidate facts for Indian land/title due diligence.
 Return ONLY valid JSON matching this schema:
 {{
@@ -114,14 +142,17 @@ class GeminiProvider:
         text_layer: str | None,
         image_bytes: bytes | None,
         force_vision: bool = False,
+        pass_id: str = "ocr_a",
     ) -> PageExtractResult:
-        if text_layer and text_layer.strip() and not force_vision:
+        if text_layer and text_layer.strip() and not force_vision and pass_id != "ocr_b":
             return PageExtractResult(
                 text=text_layer.strip(),
                 confidence=0.95,
                 provider="digital_text",
                 source_type="DIGITAL",
                 model="digital",
+                prompt_id="page_ocr",
+                prompt_version="2",
             )
 
         if not image_bytes:
@@ -131,13 +162,16 @@ class GeminiProvider:
                 provider="gemini",
                 source_type="OCR",
                 model=self.ocr_model,
+                prompt_id="page_ocr_b" if pass_id == "ocr_b" else "page_ocr",
+                prompt_version="2",
             )
 
         from google.genai import types
 
+        ocr_prompt = OCR_B_PROMPT if pass_id == "ocr_b" else OCR_PROMPT
         parts = [
             types.Part.from_bytes(data=image_bytes, mime_type="image/png"),
-            types.Part.from_text(text=OCR_PROMPT + f"\nPage number: {page_number}"),
+            types.Part.from_text(text=ocr_prompt + f"\nPage number: {page_number}"),
         ]
         response = self.client.models.generate_content(
             model=self.ocr_model,
@@ -149,11 +183,11 @@ class GeminiProvider:
         return PageExtractResult(
             text=str(data.get("text", "")),
             confidence=float(data.get("confidence", 0.7)),
-            provider="gemini",
+            provider="gemini_b" if pass_id == "ocr_b" else "gemini",
             source_type="OCR",
             model=self.ocr_model,
-            prompt_id="page_ocr",
-            prompt_version="1",
+            prompt_id="page_ocr_b" if pass_id == "ocr_b" else "page_ocr",
+            prompt_version="2",
             schema_version="ocr.v1",
             temperature=0.0,
             input_tokens=getattr(usage, "prompt_token_count", None) if usage else None,
@@ -161,7 +195,9 @@ class GeminiProvider:
         )
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
-        # Phase 4 RAG embeddings via Gemini
+        # Phase 4 RAG embeddings via Gemini (normalize to 768-d for pgvector)
+        from packages.retrieval.embeddings import pad_or_trim_vector
+
         result = self.client.models.embed_content(
             model=self.embed_model,
             contents=texts,
@@ -170,7 +206,7 @@ class GeminiProvider:
         out: list[list[float]] = []
         for emb in embeddings:
             values = getattr(emb, "values", None) or []
-            out.append(list(values))
+            out.append(pad_or_trim_vector(list(values)))
         return out
 
     async def synthesize_answer(
@@ -342,15 +378,21 @@ class GeminiProvider:
         doc_type: str,
         filename: str | None,
         evidence_pages: list[dict[str, Any]],
+        focus: str | None = None,
     ) -> StructuredExtractResult:
         evidence_text = "\n\n".join(
             f"--- page {p.get('page_number')} ---\n{(p.get('text') or '')[:6000]}"
             for p in evidence_pages
         )[:24000]
-        prompt = STRUCTURED_EXTRACT_PROMPT.format(
-            doc_type=doc_type or "unknown",
-            filename=filename or "",
-            evidence_text=evidence_text or "(no evidence text)",
+        focus_key = (focus or "full").lower()
+        preamble = FOCUS_PREAMBLES.get(focus_key, FOCUS_PREAMBLES["full"])
+        prompt = (
+            f"Focus directive: {preamble}\n\n"
+            + STRUCTURED_EXTRACT_PROMPT.format(
+                doc_type=doc_type or "unknown",
+                filename=filename or "",
+                evidence_text=evidence_text or "(no evidence text)",
+            )
         )
         response = self.client.models.generate_content(
             model=self.classify_model,
@@ -360,3 +402,29 @@ class GeminiProvider:
         data = self._parse_json(response.text or "{}")
         usage = getattr(response, "usage_metadata", None)
         return self._parse_structured(data, model=self.classify_model, usage=usage)
+
+    async def reason_legal_findings(
+        self, *, findings_payload: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        from packages.ai.routing import RouteEngine, model_for_route, route_for_stage
+
+        route = route_for_stage("legal_layer2")
+        model = model_for_route(route) if route != RouteEngine.HUMAN else self.pro_model
+        prompt = (
+            f"{LEGAL_LAYER2_PROMPT}\n\nLayer-1 findings:\n"
+            f"{json.dumps(findings_payload, default=str)[:20000]}\n"
+        )
+        response = self.client.models.generate_content(
+            model=model or self.pro_model,
+            contents=prompt,
+            config={"temperature": 0.0},
+        )
+        data = self._parse_json(response.text or '{"notes":[]}')
+        usage = getattr(response, "usage_metadata", None)
+        return {
+            "notes": data.get("notes") or [],
+            "model": model or self.pro_model,
+            "route": route.value,
+            "input_tokens": getattr(usage, "prompt_token_count", None) if usage else None,
+            "output_tokens": getattr(usage, "candidates_token_count", None) if usage else None,
+        }

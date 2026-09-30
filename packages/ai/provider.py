@@ -49,6 +49,7 @@ class LLMProvider(Protocol):
         text_layer: str | None,
         image_bytes: bytes | None,
         force_vision: bool = False,
+        pass_id: str = "ocr_a",
     ) -> PageExtractResult: ...
 
     async def extract_structured(
@@ -57,12 +58,17 @@ class LLMProvider(Protocol):
         doc_type: str,
         filename: str | None,
         evidence_pages: list[dict[str, Any]],
+        focus: str | None = None,
     ) -> StructuredExtractResult: ...
 
     async def embed(self, texts: list[str]) -> list[list[float]]: ...
 
     async def synthesize_answer(
         self, *, system: str, packed_context: dict[str, Any]
+    ) -> dict[str, Any]: ...
+
+    async def reason_legal_findings(
+        self, *, findings_payload: list[dict[str, Any]]
     ) -> dict[str, Any]: ...
 
 

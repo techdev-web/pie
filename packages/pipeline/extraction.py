@@ -178,6 +178,7 @@ async def stage_structured_extract(
             doc_type=doc_type,
             filename=document.source_filename,
             evidence_pages=evidence_pages,
+            focus="full",
         )
         t1 = time.perf_counter()
     except Exception as exc:

@@ -23,6 +23,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from pgvector.sqlalchemy import Vector
 
 
 def _uuid() -> uuid.UUID:
@@ -45,7 +46,31 @@ class Tenant(Base):
     )
 
     api_keys: Mapped[list[ApiKey]] = relationship(back_populates="tenant")
+    users: Mapped[list[User]] = relationship(back_populates="tenant")
     cases: Mapped[list[Case]] = relationship(back_populates="tenant")
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    tenant: Mapped[Tenant] = relationship(back_populates="users")
+    api_keys: Mapped[list[ApiKey]] = relationship(back_populates="user")
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "email", name="uq_users_tenant_email"),
+        Index("ix_users_tenant_id", "tenant_id"),
+    )
 
 
 class ApiKey(Base):
@@ -54,6 +79,9 @@ class ApiKey(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     name: Mapped[str] = mapped_column(String(128), nullable=False, default="default")
     key_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
@@ -67,8 +95,12 @@ class ApiKey(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     tenant: Mapped[Tenant] = relationship(back_populates="api_keys")
+    user: Mapped[User | None] = relationship(back_populates="api_keys")
 
-    __table_args__ = (Index("ix_api_keys_tenant_id", "tenant_id"),)
+    __table_args__ = (
+        Index("ix_api_keys_tenant_id", "tenant_id"),
+        Index("ix_api_keys_user_id", "user_id"),
+    )
 
 
 class Case(Base):
@@ -101,13 +133,19 @@ class CaseMember(Base):
         UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     role: Mapped[str] = mapped_column(String(64), default="owner", nullable=False)
     label: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     case: Mapped[Case] = relationship(back_populates="members")
 
-    __table_args__ = (Index("ix_case_members_case_id", "case_id"),)
+    __table_args__ = (
+        Index("ix_case_members_case_id", "case_id"),
+        Index("ix_case_members_user_id", "user_id"),
+    )
 
 
 class Document(Base):
@@ -840,8 +878,8 @@ class Embedding(Base):
     )
     content_text: Mapped[str] = mapped_column(Text, nullable=False)
     content_normalized: Mapped[str] = mapped_column(Text, nullable=False)
-    embedding: Mapped[list[Any]] = mapped_column(JSONB, nullable=False)
-    dims: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(Vector(768), nullable=False)
+    dims: Mapped[int] = mapped_column(Integer, default=768, nullable=False)
     model: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

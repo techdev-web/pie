@@ -142,7 +142,7 @@ async def decide_review_task(
     session: AsyncSession = Depends(get_session),
 ) -> ReviewDecisionResponse:
     await _assert_case_access(session, case_id, auth.tenant_id)
-    actor = str(auth.api_key_id) if auth.api_key_id else "api"
+    actor = auth.actor_label
     try:
         task, decision = await apply_review_decision(
             session,
@@ -225,7 +225,7 @@ async def flag_for_review(
     session: AsyncSession = Depends(get_session),
 ) -> ReviewTaskOut:
     await _assert_case_access(session, case_id, auth.tenant_id)
-    actor = str(auth.api_key_id) if auth.api_key_id else "api"
+    actor = auth.actor_label
     task = await create_user_flag_task(
         session,
         case_id=case_id,
