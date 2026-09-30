@@ -483,10 +483,10 @@ Post-check: if answer asserts a critical ID not present in retrieved evidence �
 
 ### 4.7 Exit checklist
 
-- [ ] “Who is the current owner?” returns status + citations.
-- [ ] “What about survey 183/2?” hits exact ID path first.
-- [ ] After confirming a fact in UI, subsequent chat uses `VERIFIED` state.
-- [ ] New document upload updates retrieval without rebuilding unrelated cases.
+- [x] “Who is the current owner?” returns status + citations.
+- [x] “What about survey 183/2?” hits exact ID path first.
+- [x] After confirming a fact in UI, subsequent chat uses `VERIFIED` state.
+- [x] New document upload updates retrieval without rebuilding unrelated cases.
 
 ------------------------------------------------------------------------
 
@@ -537,9 +537,9 @@ Start with **case-local** learning (aliases, preferred spellings, confirmed link
 
 ### 5.4 Exit checklist
 
-- [ ] Review queue filterable by severity / case / type.  
-- [ ] Decision changes appear in chat and report without re-OCR.  
-- [ ] Full audit: who changed what fact, when, why.
+- [x] Review queue filterable by severity / case / type.  
+- [x] Decision changes appear in chat and report without re-OCR.  
+- [x] Full audit: who changed what fact, when, why.
 
 ------------------------------------------------------------------------
 

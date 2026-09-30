@@ -1,6 +1,6 @@
 # PIE — Property Intelligence Engine
 
-Due-diligence document intelligence (Phase 0–2): multi-tenant cases, immutable document storage, durable jobs, evidence spine, and structured facts (owners, parcels, dates) with evidence citations.
+Due-diligence document intelligence (Phase 0–5): multi-tenant cases, immutable document storage, durable jobs, evidence spine, structured facts, cross-doc reconciliation, case memory, evidence-grounded chat, and human review with knowledge compounding.
 
 ## Quick start
 
@@ -45,7 +45,7 @@ arq apps.worker.main.WorkerSettings
 cd apps/web && npm install && npm run dev
 ```
 
-Open http://localhost:5173 — paste the API key, create a case, upload a PDF. After the job succeeds, open **Why this fact?** to see cited evidence.
+Open http://localhost:5173 — paste the API key, create a case, upload a PDF. After the job succeeds, open **Why?** / **Confirm**, or ask in **Case chat**.
 
 ## Sample curl
 
@@ -63,24 +63,28 @@ curl -s -X POST "http://localhost:8000/v1/cases/CASE_ID/documents/complete" \
   -H "X-API-Key: $PIE_KEY" \
   -F "file=@./sample.pdf" -F "role=primary"
 
-# facts (after job succeeds)
+# facts / chat (after job succeeds)
 curl -s "http://localhost:8000/v1/cases/CASE_ID/facts" -H "X-API-Key: $PIE_KEY"
-curl -s "http://localhost:8000/v1/cases/CASE_ID/facts/FACT_ID" -H "X-API-Key: $PIE_KEY"
+curl -s -X POST "http://localhost:8000/v1/cases/CASE_ID/chat" \
+  -H "X-API-Key: $PIE_KEY" -H "Content-Type: application/json" \
+  -d '{"message":"Who is the current owner?"}'
+curl -s -X POST "http://localhost:8000/v1/cases/CASE_ID/facts/FACT_ID/confirm" \
+  -H "X-API-Key: $PIE_KEY" -H "Content-Type: application/json" -d '{}'
 ```
 
-## Architecture (Phase 0–2)
+## Architecture (Phase 0–5)
 
-- **API** (`apps/api`): cases, uploads, jobs, evidence/pages, facts
-- **Worker** (`apps/worker`): arq consumer running pipeline stages
-- **Pipeline**: `integrity → page_split → page_quality → classify → ocr → evidence_persist → structured_extract`
+- **API** (`apps/api`): cases, uploads, jobs, evidence/pages, facts, intelligence, chat/memory, review queue
+- **Worker** (`apps/worker`): arq consumer running pipeline stages + case reconciliation
+- **Pipeline**: `integrity → page_split → page_quality → classify → ocr → evidence_persist → structured_extract → index_embeddings` (+ case `reconcile` → review sync)
+- **Retrieval** (`packages/retrieval`): hybrid RAG + answer contract + guardrails + review decisions / compounding
 - **Storage**: MinIO (S3) or `STORAGE_BACKEND=fs`
 - **AI**: `GeminiProvider` when `GEMINI_API_KEY` is set; otherwise `MockProvider`
-- **Phase 2**: candidate facts → deterministic normalization → persons/parcels/ownership_events → facts linked to evidence
 
 ## Tests
 
 ```bash
-pytest tests/test_unit.py tests/test_idempotency.py tests/test_phase2.py -q
+pytest tests/test_unit.py tests/test_idempotency.py tests/test_phase2.py tests/test_phase3.py tests/test_phase4.py tests/test_phase5.py -q
 # with Compose up + migrated DB:
 pytest tests/test_api.py -q
 ```
@@ -91,4 +95,10 @@ pytest tests/test_api.py -q
 
 **Phase 1:** every page yields evidence rows; integrity warnings persisted; re-run OCR with same versions skips; UI shows page + evidence highlight.
 
-**Phase 2:** sale deed yields owner/buyer/seller/survey/area/date facts with evidence IDs; UI “Why this fact?” opens cited pages; no EXTRACTED fact without an evidence link (NOT_FOUND allowed without links).
+**Phase 2:** sale deed yields owner/buyer/seller/survey/area/date facts with evidence IDs; UI “Why?” opens cited pages; no EXTRACTED fact without an evidence link (NOT_FOUND allowed without links).
+
+**Phase 3:** conflicting deeds produce OPEN conflicts; document graph shows missing instruments; scorecard + open conflict count on case overview.
+
+**Phase 4:** case chat returns status + citations; survey ID queries hit exact ID path first; confirming a fact upgrades to VERIFIED and chat prefers it; new uploads index embeddings for that case only.
+
+**Phase 5:** review queue filterable by severity/case/type; approve/reject/merge/split/request_docs/annotate update facts + conflicts + memory without re-OCR; audit trail records who changed what, when, why; resolutions survive re-reconcile.

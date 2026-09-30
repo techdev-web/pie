@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_classify_model: str = "gemini-2.0-flash"
     gemini_ocr_model: str = "gemini-2.0-flash"
+    gemini_chat_model: str = "gemini-2.0-flash"
 
     pie_env: str = "development"
     api_host: str = "0.0.0.0"

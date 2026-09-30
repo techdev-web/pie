@@ -49,6 +49,16 @@ export default function App() {
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [imageUrl, setImageUrl] = useState(null);
+  const [chatInput, setChatInput] = useState("Who is the current owner?");
+  const [chatMessages, setChatMessages] = useState([]);
+  const [conversationId, setConversationId] = useState(null);
+  const [chatBusy, setChatBusy] = useState(false);
+  const [reviewTasks, setReviewTasks] = useState([]);
+  const [reviewSeverity, setReviewSeverity] = useState("");
+  const [reviewStatus, setReviewStatus] = useState("OPEN");
+  const [reviewType, setReviewType] = useState("");
+  const [auditEvents, setAuditEvents] = useState([]);
+  const [decideBusy, setDecideBusy] = useState(null);
 
   const saveKey = () => {
     localStorage.setItem("pie_api_key", apiKey);
@@ -98,6 +108,40 @@ export default function App() {
     [apiKey]
   );
 
+  const loadReviewTasks = useCallback(
+    async (caseId, { status, severity, taskType } = {}) => {
+      if (!caseId) return;
+      const params = new URLSearchParams();
+      const st = status ?? reviewStatus;
+      const sev = severity ?? reviewSeverity;
+      const tt = taskType ?? reviewType;
+      if (st) params.set("status", st);
+      if (sev) params.set("severity", sev);
+      if (tt) params.set("task_type", tt);
+      const q = params.toString() ? `?${params}` : "";
+      try {
+        const data = await api(`/v1/cases/${caseId}/review-tasks${q}`, { apiKey });
+        setReviewTasks(data);
+      } catch {
+        setReviewTasks([]);
+      }
+    },
+    [apiKey, reviewStatus, reviewSeverity, reviewType]
+  );
+
+  const loadAudit = useCallback(
+    async (caseId) => {
+      if (!caseId) return;
+      try {
+        const data = await api(`/v1/cases/${caseId}/audit-events?limit=40`, { apiKey });
+        setAuditEvents(data);
+      } catch {
+        setAuditEvents([]);
+      }
+    },
+    [apiKey]
+  );
+
   const loadCase = useCallback(
     async (caseId) => {
       setError("");
@@ -105,7 +149,11 @@ export default function App() {
       setCaseDetail(detail);
       setSelectedCase(caseId);
       setWhyFact(null);
+      setChatMessages([]);
+      setConversationId(null);
       await loadIntelligence(caseId);
+      await loadReviewTasks(caseId);
+      await loadAudit(caseId);
       if (detail.documents?.length) {
         setSelectedDoc(detail.documents[0].id);
       } else {
@@ -114,9 +162,11 @@ export default function App() {
         setEvidence([]);
         setFacts([]);
         setIntelligence(null);
+        setReviewTasks([]);
+        setAuditEvents([]);
       }
     },
-    [apiKey, loadIntelligence]
+    [apiKey, loadIntelligence, loadReviewTasks, loadAudit]
   );
 
   useEffect(() => {
@@ -163,6 +213,8 @@ export default function App() {
             setIntelligence(intel);
             if (intel?.scorecard) break;
           }
+          await loadReviewTasks(selectedCase);
+          await loadAudit(selectedCase);
         }
         return;
       }
@@ -189,6 +241,132 @@ export default function App() {
     setWhyFact(detail);
     if (detail.evidence?.length) {
       setPageNum(detail.evidence[0].page_number);
+    }
+  };
+
+  const confirmFact = async (fact) => {
+    if (!selectedCase) return;
+    setError("");
+    await api(`/v1/cases/${selectedCase}/facts/${fact.fact_id}/confirm`, {
+      apiKey,
+      method: "POST",
+      body: {},
+    });
+    setStatus(`Confirmed ${fact.fact_id} → VERIFIED`);
+    await loadFacts(selectedCase, null);
+  };
+
+  const rejectFact = async (fact) => {
+    if (!selectedCase) return;
+    setError("");
+    await api(`/v1/cases/${selectedCase}/facts/${fact.fact_id}/reject`, {
+      apiKey,
+      method: "POST",
+      body: {},
+    });
+    setStatus(`Rejected ${fact.fact_id}`);
+    await loadFacts(selectedCase, null);
+  };
+
+  const decideReview = async (task, action, extra = {}) => {
+    if (!selectedCase) return;
+    setError("");
+    setDecideBusy(`${task.task_id}:${action}`);
+    try {
+      let body = { action, ...extra };
+      if (action === "approve" && (task.related_fact_ids || []).length > 1 && !extra.selected_fact_id) {
+        const pick = window.prompt(
+          `Approve which fact_id?\n${(task.related_fact_ids || []).join("\n")}`,
+          task.related_fact_ids[0]
+        );
+        if (!pick) return;
+        body.selected_fact_id = pick;
+      }
+      if (action === "merge" && !extra.preferred_name && !extra.selected_fact_id) {
+        const pick = window.prompt("Preferred name / spelling for merge:", "");
+        if (!pick) return;
+        body.preferred_name = pick;
+      }
+      if (action === "annotate") {
+        const note = window.prompt("Annotation note:", "");
+        if (!note) return;
+        body.note = note;
+      }
+      if (action === "request_docs") {
+        const label = window.prompt("Document to request:", task.title || "");
+        if (label) body.requested_doc_label = label;
+      }
+      const res = await api(`/v1/cases/${selectedCase}/review-tasks/${task.task_id}/decide`, {
+        apiKey,
+        method: "POST",
+        body,
+      });
+      setStatus(`Review ${action}: ${res.decision.decision_id}`);
+      await loadReviewTasks(selectedCase);
+      await loadFacts(selectedCase, null);
+      await loadIntelligence(selectedCase);
+      await loadAudit(selectedCase);
+    } finally {
+      setDecideBusy(null);
+    }
+  };
+
+  const flagLastAnswer = async () => {
+    if (!selectedCase) return;
+    const last = [...chatMessages].reverse().find((m) => m.role === "assistant");
+    if (!last) {
+      setError("No assistant answer to flag");
+      return;
+    }
+    setError("");
+    await api(`/v1/cases/${selectedCase}/review-tasks/flag`, {
+      apiKey,
+      method: "POST",
+      body: {
+        summary: `User flagged chat answer (${last.status || "n/a"}): ${last.content.slice(0, 400)}`,
+        conversation_message_id: last.message_id || null,
+        severity: "MEDIUM",
+      },
+    });
+    setStatus("Flagged answer for review");
+    await loadReviewTasks(selectedCase);
+    await loadAudit(selectedCase);
+  };
+
+  const sendChat = async () => {
+    if (!selectedCase || !chatInput.trim()) return;
+    setError("");
+    setChatBusy(true);
+    const userMsg = chatInput.trim();
+    setChatMessages((m) => [...m, { role: "user", content: userMsg }]);
+    setChatInput("");
+    try {
+      const body = { message: userMsg };
+      if (conversationId) body.conversation_id = conversationId;
+      const res = await api(`/v1/cases/${selectedCase}/chat`, {
+        apiKey,
+        method: "POST",
+        body,
+      });
+      setConversationId(res.conversation_id);
+      setChatMessages((m) => [
+        ...m,
+        {
+          role: "assistant",
+          content: res.answer,
+          status: res.status,
+          evidence: res.evidence || [],
+          conflicts: res.conflicts || [],
+          missing_evidence: res.missing_evidence || [],
+          paths: res.retrieval_paths || [],
+          message_id: res.message_id,
+        },
+      ]);
+      const firstEv = (res.evidence || []).find((e) => e.page);
+      if (firstEv?.page) setPageNum(firstEv.page);
+      if (firstEv?.document_id) setSelectedDoc(firstEv.document_id);
+    } finally {
+      setChatBusy(false);
     }
   };
 
@@ -237,11 +415,11 @@ export default function App() {
     <div className="app">
       <div className="brand">
         <h1>PIE</h1>
-        <span>Property Intelligence Engine — reconcile · conflicts · graphs</span>
+        <span>Property Intelligence Engine — review · memory · chat</span>
       </div>
       <p className="lede">
-        Upload title documents to a case. PIE extracts facts with evidence, reconciles across
-        documents, and surfaces conflicts, missing instruments, and a completeness scorecard.
+        Upload title documents to a case. PIE compounds facts, conflicts, and memory — then
+        answers case-scoped questions with an evidence contract.
       </p>
 
       <div className="panel">
@@ -351,6 +529,8 @@ export default function App() {
                     })
                       .then(() => loadIntelligence(selectedCase))
                       .then(() => loadFacts(selectedCase, null))
+                      .then(() => loadReviewTasks(selectedCase))
+                      .then(() => loadAudit(selectedCase))
                       .catch((e) => setError(e.message))
                   }
                 >
@@ -443,6 +623,288 @@ export default function App() {
 
           <div className="panel">
             <div className="row">
+              <h3 style={{ margin: 0, flex: 1 }}>Review queue</h3>
+              {selectedCase && (
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() =>
+                    loadReviewTasks(selectedCase)
+                      .then(() => loadAudit(selectedCase))
+                      .catch((e) => setError(e.message))
+                  }
+                >
+                  Refresh
+                </button>
+              )}
+            </div>
+            {!selectedCase && <p className="status">Select a case to review.</p>}
+            {selectedCase && (
+              <>
+                <div className="row review-filters">
+                  <label>
+                    Status
+                    <select
+                      value={reviewStatus}
+                      onChange={(e) => {
+                        setReviewStatus(e.target.value);
+                        loadReviewTasks(selectedCase, { status: e.target.value }).catch((err) =>
+                          setError(err.message)
+                        );
+                      }}
+                    >
+                      <option value="">All</option>
+                      <option value="OPEN">OPEN</option>
+                      <option value="RESOLVED">RESOLVED</option>
+                      <option value="CANCELLED">CANCELLED</option>
+                    </select>
+                  </label>
+                  <label>
+                    Severity
+                    <select
+                      value={reviewSeverity}
+                      onChange={(e) => {
+                        setReviewSeverity(e.target.value);
+                        loadReviewTasks(selectedCase, { severity: e.target.value }).catch((err) =>
+                          setError(err.message)
+                        );
+                      }}
+                    >
+                      <option value="">All</option>
+                      <option value="CRITICAL">CRITICAL</option>
+                      <option value="HIGH">HIGH</option>
+                      <option value="MEDIUM">MEDIUM</option>
+                      <option value="LOW">LOW</option>
+                    </select>
+                  </label>
+                  <label>
+                    Type
+                    <select
+                      value={reviewType}
+                      onChange={(e) => {
+                        setReviewType(e.target.value);
+                        loadReviewTasks(selectedCase, { taskType: e.target.value }).catch((err) =>
+                          setError(err.message)
+                        );
+                      }}
+                    >
+                      <option value="">All</option>
+                      <option value="OWNER_IDENTITY_AMBIGUITY">Owner ambiguity</option>
+                      <option value="CRITICAL_ID_CONFLICT">Critical ID</option>
+                      <option value="CRITICAL_ID_OCR_CONFLICT">OCR ID</option>
+                      <option value="SHARE_MATH_INCONSISTENCY">Share math</option>
+                      <option value="ENCUMBRANCE_UNRESOLVED">Encumbrance</option>
+                      <option value="USER_FLAG">User flag</option>
+                      <option value="REQUIRES_REVIEW">Requires review</option>
+                    </select>
+                  </label>
+                </div>
+                {!reviewTasks.length && (
+                  <p className="status">No review tasks for these filters.</p>
+                )}
+                <ul className="list">
+                  {reviewTasks.map((t) => (
+                    <li key={t.task_id}>
+                      <div className="fact-row">
+                        <div>
+                          <span
+                            className={`pill ${
+                              t.severity === "CRITICAL" || t.severity === "HIGH"
+                                ? "danger"
+                                : "warn"
+                            }`}
+                          >
+                            {t.severity}
+                          </span>{" "}
+                          <span className="pill">{t.task_type}</span>{" "}
+                          <span className="pill">{t.status}</span>
+                          <div className="fact-value">{t.title}</div>
+                          <div className="status">{t.summary}</div>
+                          {!!t.related_fact_ids?.length && (
+                            <div className="status">
+                              Facts: {t.related_fact_ids.join(", ")}
+                            </div>
+                          )}
+                        </div>
+                        {t.status === "OPEN" && (
+                          <div className="fact-actions">
+                            <button
+                              type="button"
+                              className="secondary"
+                              disabled={!!decideBusy}
+                              onClick={() =>
+                                decideReview(t, "approve").catch((e) => setError(e.message))
+                              }
+                            >
+                              Approve
+                            </button>
+                            <button
+                              type="button"
+                              className="secondary"
+                              disabled={!!decideBusy}
+                              onClick={() =>
+                                decideReview(t, "reject").catch((e) => setError(e.message))
+                              }
+                            >
+                              Reject
+                            </button>
+                            <button
+                              type="button"
+                              className="secondary"
+                              disabled={!!decideBusy}
+                              onClick={() =>
+                                decideReview(t, "merge").catch((e) => setError(e.message))
+                              }
+                            >
+                              Merge
+                            </button>
+                            <button
+                              type="button"
+                              className="secondary"
+                              disabled={!!decideBusy}
+                              onClick={() =>
+                                decideReview(t, "request_docs").catch((e) =>
+                                  setError(e.message)
+                                )
+                              }
+                            >
+                              Request docs
+                            </button>
+                            <button
+                              type="button"
+                              className="secondary"
+                              disabled={!!decideBusy}
+                              onClick={() =>
+                                decideReview(t, "annotate").catch((e) => setError(e.message))
+                              }
+                            >
+                              Annotate
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+                {!!auditEvents.length && (
+                  <div className="intel-block">
+                    <h4>Audit trail</h4>
+                    <ul className="list audit-list">
+                      {auditEvents.slice(0, 12).map((ev) => (
+                        <li key={ev.id}>
+                          <span className="pill">{ev.action}</span>{" "}
+                          <span className="status">
+                            {ev.resource_type}
+                            {ev.resource_id ? `:${ev.resource_id}` : ""} · {ev.actor}
+                          </span>
+                          {ev.details?.reason || ev.details?.note ? (
+                            <div className="status">
+                              {ev.details.reason || ev.details.note}
+                            </div>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="panel">
+            <div className="row">
+              <h3 style={{ margin: 0, flex: 1 }}>Case chat</h3>
+              {conversationId && (
+                <span className="pill">{conversationId.slice(0, 8)}…</span>
+              )}
+              {selectedCase && !!chatMessages.some((m) => m.role === "assistant") && (
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => flagLastAnswer().catch((e) => setError(e.message))}
+                >
+                  Flag answer
+                </button>
+              )}
+            </div>
+            {!selectedCase && <p className="status">Select a case to chat.</p>}
+            {selectedCase && (
+              <>
+                <div className="chat-log">
+                  {!chatMessages.length && (
+                    <p className="status">
+                      Try: “Who is the current owner?” · “What about survey 183/2?” · “What
+                      should I upload next?”
+                    </p>
+                  )}
+                  {chatMessages.map((m, i) => (
+                    <div key={i} className={`chat-bubble ${m.role}`}>
+                      <div className="chat-role">{m.role}</div>
+                      <div className="chat-body">{m.content}</div>
+                      {m.status && (
+                        <div className="status" style={{ marginTop: "0.35rem" }}>
+                          <span className="pill">{m.status}</span>{" "}
+                          {(m.paths || []).map((p) => (
+                            <span key={p} className="pill">
+                              {p}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {!!m.evidence?.length && (
+                        <div className="chat-cites">
+                          {m.evidence.slice(0, 4).map((ev, j) => (
+                            <button
+                              key={j}
+                              type="button"
+                              className="secondary"
+                              onClick={() => {
+                                if (ev.document_id) setSelectedDoc(ev.document_id);
+                                if (ev.page) setPageNum(ev.page);
+                              }}
+                            >
+                              {ev.evidence_id || ev.fact_id || "cite"}
+                              {ev.page ? ` · p.${ev.page}` : ""}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {!!m.conflicts?.length && (
+                        <div className="status" style={{ marginTop: "0.35rem" }}>
+                          {m.conflicts.length} open conflict(s) surfaced
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <div className="row" style={{ marginTop: "0.65rem" }}>
+                  <label style={{ flex: 1 }}>
+                    Ask the case
+                    <input
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !chatBusy) {
+                          sendChat().catch((err) => setError(err.message));
+                        }
+                      }}
+                      disabled={chatBusy}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    disabled={chatBusy}
+                    onClick={() => sendChat().catch((e) => setError(e.message))}
+                  >
+                    {chatBusy ? "…" : "Send"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="panel">
+            <div className="row">
               <h3 style={{ margin: 0, flex: 1 }}>Extracted facts</h3>
               {whyFact && (
                 <button type="button" className="secondary" onClick={() => setWhyFact(null)}>
@@ -473,13 +935,29 @@ export default function App() {
                         conf {(f.confidence ?? 0).toFixed(2)} · {f.evidence_count} evidence
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() => openWhy(f).catch((e) => setError(e.message))}
-                    >
-                      Why this fact?
-                    </button>
+                    <div className="fact-actions">
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => openWhy(f).catch((e) => setError(e.message))}
+                      >
+                        Why?
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => confirmFact(f).catch((e) => setError(e.message))}
+                      >
+                        Confirm
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => rejectFact(f).catch((e) => setError(e.message))}
+                      >
+                        Reject
+                      </button>
+                    </div>
                   </div>
                 </li>
               ))}

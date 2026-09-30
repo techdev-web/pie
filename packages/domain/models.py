@@ -1,4 +1,4 @@
-"""SQLAlchemy models for Phase 0–3."""
+"""SQLAlchemy models for Phase 0–5."""
 
 from __future__ import annotations
 
@@ -806,3 +806,236 @@ class CaseStageRun(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (Index("ix_case_stage_runs_case_id", "case_id"),)
+
+
+# --- Phase 4 ---
+
+
+class Embedding(Base):
+    __tablename__ = "embeddings"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True
+    )
+    content_text: Mapped[str] = mapped_column(Text, nullable=False)
+    content_normalized: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding: Mapped[list[Any]] = mapped_column(JSONB, nullable=False)
+    dims: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "case_id", "source_type", "source_id", "model", name="uq_embedding_source_model"
+        ),
+        Index("ix_embeddings_case_id", "case_id"),
+        Index("ix_embeddings_source", "case_id", "source_type"),
+        Index("ix_embeddings_document_id", "document_id"),
+    )
+
+
+class CaseMemory(Base):
+    __tablename__ = "case_memories"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    key_facts_summary: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    open_questions: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    user_preferences: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    last_reconciliation_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("case_completeness_snapshots.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    summary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("case_id", "version", name="uq_case_memory_version"),
+        Index("ix_case_memories_case_id", "case_id"),
+    )
+
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    messages: Mapped[list[ConversationMessage]] = relationship(back_populates="conversation")
+
+    __table_args__ = (Index("ix_conversations_case_id", "case_id"),)
+
+
+class RetrievalTrace(Base):
+    __tablename__ = "retrieval_traces"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    query: Mapped[str] = mapped_column(Text, nullable=False)
+    query_class: Mapped[str] = mapped_column(String(64), nullable=False)
+    extracted_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    retrieved: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    packing_notes: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (Index("ix_retrieval_traces_case_id", "case_id"),)
+
+
+class ConversationMessage(Base):
+    __tablename__ = "conversation_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    answer_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    retrieval_trace_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("retrieval_traces.id", ondelete="SET NULL"), nullable=True
+    )
+    answer_payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    conversation: Mapped[Conversation] = relationship(back_populates="messages")
+
+    __table_args__ = (
+        Index("ix_conversation_messages_conversation_id", "conversation_id"),
+        Index("ix_conversation_messages_case_id", "case_id"),
+    )
+
+
+class MemoryWriteback(Base):
+    __tablename__ = "memory_writebacks"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    signal_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    fact_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("facts.id", ondelete="SET NULL"), nullable=True
+    )
+    prior_state: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    new_state: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    conversation_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("conversation_messages.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    review_decision_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("review_decisions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_memory_writebacks_case_id", "case_id"),
+        Index("ix_memory_writebacks_fact_id", "fact_id"),
+        Index("ix_memory_writebacks_review_decision_id", "review_decision_id"),
+    )
+
+
+# --- Phase 5 ---
+
+
+class ReviewTask(Base):
+    __tablename__ = "review_tasks"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    task_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    task_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    severity: Mapped[str] = mapped_column(String(32), default="HIGH", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="OPEN", nullable=False)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_ref_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    fingerprint: Mapped[str] = mapped_column(String(128), nullable=False)
+    related_fact_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    related_conflict_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    related_gap_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    decisions: Mapped[list[ReviewDecision]] = relationship(back_populates="task")
+
+    __table_args__ = (
+        UniqueConstraint("case_id", "fingerprint", name="uq_review_task_fingerprint"),
+        Index("ix_review_tasks_case_id", "case_id"),
+        Index("ix_review_tasks_status", "case_id", "status"),
+        Index("ix_review_tasks_severity", "case_id", "severity"),
+        Index("ix_review_tasks_type", "task_type"),
+        Index("ix_review_tasks_tenant_status", "tenant_id", "status"),
+    )
+
+
+class ReviewDecision(Base):
+    __tablename__ = "review_decisions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    decision_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    review_task_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("review_tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor: Mapped[str] = mapped_column(String(128), default="user", nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    selected_fact_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    prior_states: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    effects: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    task: Mapped[ReviewTask] = relationship(back_populates="decisions")
+
+    __table_args__ = (
+        Index("ix_review_decisions_task_id", "review_task_id"),
+        Index("ix_review_decisions_case_id", "case_id"),
+    )

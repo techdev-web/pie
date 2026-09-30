@@ -61,6 +61,10 @@ class LLMProvider(Protocol):
 
     async def embed(self, texts: list[str]) -> list[list[float]]: ...
 
+    async def synthesize_answer(
+        self, *, system: str, packed_context: dict[str, Any]
+    ) -> dict[str, Any]: ...
+
 
 def get_llm_provider(settings: Settings | None = None) -> LLMProvider:
     settings = settings or get_settings()

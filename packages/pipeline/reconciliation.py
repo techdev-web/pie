@@ -854,7 +854,7 @@ async def _reconcile_body(
     await session.execute(delete(GraphEdge).where(GraphEdge.case_id == case_id))
     await session.execute(delete(GraphNode).where(GraphNode.case_id == case_id))
 
-    # Reset fact states that reconciliation owns (keep terminal human states later)
+    # Reset fact states that reconciliation owns (keep human VERIFIED / UNVERIFIED)
     for f in facts:
         if f.verification_state in ("SUPPORTED", "CORROBORATED", "CONFLICTING"):
             f.verification_state = "EXTRACTED"
@@ -899,14 +899,23 @@ async def _reconcile_body(
                 )
             )
 
-    # Update fact verification states
+    # Update fact verification states (never downgrade human VERIFIED)
     by_type_docs: dict[str, set[uuid.UUID]] = defaultdict(set)
     by_type_vals: dict[str, set[str]] = defaultdict(set)
     for f in facts:
         if f.id in conflicting_ids:
-            f.verification_state = "CONFLICTING"
+            if f.verification_state != "VERIFIED":
+                f.verification_state = "CONFLICTING"
             continue
-        if f.verification_state in ("NOT_FOUND", "NOT_PROVIDED", "NOT_APPLICABLE", "AMBIGUOUS", "REQUIRES_REVIEW"):
+        if f.verification_state in (
+            "NOT_FOUND",
+            "NOT_PROVIDED",
+            "NOT_APPLICABLE",
+            "AMBIGUOUS",
+            "REQUIRES_REVIEW",
+            "VERIFIED",
+            "UNVERIFIED",
+        ):
             continue
         nv = _norm_value(f)
         if not nv or not f.document_id:
@@ -1012,12 +1021,62 @@ async def _reconcile_body(
     )
 
     await session.commit()
+
+    # Phase 5: re-apply human resolutions that survive conflict rebuild, then sync queue
+    review_stats: dict[str, Any] = {}
+    try:
+        from packages.retrieval.review import (
+            reapply_resolved_decisions,
+            sync_review_tasks_for_case,
+        )
+
+        reapplied = await reapply_resolved_decisions(
+            session, case_id=case_id, tenant_id=tenant_id
+        )
+        review_stats = await sync_review_tasks_for_case(
+            session, case_id=case_id, tenant_id=tenant_id
+        )
+        review_stats["reapplied"] = reapplied
+
+        # Recount open conflicts after resolution re-apply
+        open_after = (
+            await session.execute(
+                select(Conflict).where(
+                    Conflict.case_id == case_id,
+                    Conflict.status == "OPEN",
+                )
+            )
+        ).scalars().all()
+        open_conflicts = len(list(open_after))
+        snap = (
+            await session.execute(
+                select(CaseCompletenessSnapshot)
+                .where(CaseCompletenessSnapshot.case_id == case_id)
+                .order_by(CaseCompletenessSnapshot.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if snap is not None:
+            snap.open_conflicts_count = open_conflicts
+            await session.commit()
+    except Exception as exc:
+        log.warning("review_sync_failed", case_id=str(case_id), error=str(exc))
+
+    # Refresh case memory after reconciliation (Phase 4)
+    try:
+        from packages.retrieval.memory import refresh_case_memory
+
+        await refresh_case_memory(session, case_id=case_id, tenant_id=tenant_id)
+    except Exception as exc:
+        log.warning("case_memory_refresh_failed", case_id=str(case_id), error=str(exc))
+
     return {
         "skipped": False,
         "fingerprint": fingerprint,
         "conflicts": open_conflicts,
         "missing_evidence": missing_count,
         "dimensions": dimensions,
+        "review_tasks": review_stats,
         "document_nodes": len(doc_graph.nodes),
         "entity_nodes": len(entity_graph.nodes),
     }

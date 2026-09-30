@@ -158,7 +158,7 @@ class GeminiProvider:
         )
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
-        # Placeholder for Phase 4 RAG; return deterministic stub vectors if needed.
+        # Phase 4 RAG embeddings via Gemini
         result = self.client.models.embed_content(
             model="text-embedding-004",
             contents=texts,
@@ -169,6 +169,30 @@ class GeminiProvider:
             values = getattr(emb, "values", None) or []
             out.append(list(values))
         return out
+
+    async def synthesize_answer(
+        self, *, system: str, packed_context: dict[str, Any]
+    ) -> dict[str, Any]:
+        prompt = (
+            f"{system}\n\nPacked case context (JSON):\n"
+            f"{json.dumps(packed_context, default=str)[:20000]}\n"
+        )
+        # Escalate to Pro when conflicts / review likely
+        model = self.classify_model
+        if packed_context.get("conflicts") or packed_context.get("query_class") == "ownership":
+            # Prefer flash unless explicitly configured; Pro optional via settings later
+            model = getattr(self.settings, "gemini_chat_model", None) or self.classify_model
+        response = self.client.models.generate_content(
+            model=model,
+            contents=prompt,
+            config={"temperature": 0.0},
+        )
+        data = self._parse_json(response.text or "{}")
+        return {
+            "answer": str(data.get("answer") or response.text or ""),
+            "status": str(data.get("status") or "PARTIALLY_SUPPORTED"),
+            "open_questions": list(data.get("open_questions") or []),
+        }
 
     def _parse_structured(self, data: dict[str, Any], *, model: str, usage: Any) -> StructuredExtractResult:
         persons = [

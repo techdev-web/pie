@@ -319,3 +319,27 @@ class MockProvider:
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         return [[float(len(t) % 97) / 97.0] * 8 for t in texts]
+
+    async def synthesize_answer(
+        self, *, system: str, packed_context: dict[str, Any]
+    ) -> dict[str, Any]:
+        hits = packed_context.get("hits") or []
+        conflicts = packed_context.get("conflicts") or []
+        if conflicts:
+            return {
+                "answer": "Conflicts are present; see packed conflict list. Do not invent a winner.",
+                "status": "CONFLICTING",
+                "open_questions": [c.get("summary") for c in conflicts[:3]],
+            }
+        if not hits:
+            return {
+                "answer": "Insufficient evidence in packed context.",
+                "status": "INSUFFICIENT_EVIDENCE",
+                "open_questions": [],
+            }
+        lines = [f"- {h.get('snippet')}" for h in hits[:5]]
+        return {
+            "answer": "Mock synthesis from packed hits:\n" + "\n".join(lines),
+            "status": "PARTIALLY_SUPPORTED",
+            "open_questions": [],
+        }

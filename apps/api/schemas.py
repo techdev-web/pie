@@ -217,3 +217,178 @@ class CaseIntelligenceOut(BaseModel):
     missing_evidence: list[MissingEvidenceOut] = Field(default_factory=list)
     document_graph: GraphOut | None = None
     entity_event_graph: GraphOut | None = None
+
+
+# --- Phase 4 ---
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=8000)
+    conversation_id: uuid.UUID | None = None
+
+
+class EvidenceCitationOut(BaseModel):
+    document_id: str | None = None
+    page: int | None = None
+    snippet: str = ""
+    bbox: list[Any] = Field(default_factory=list)
+    evidence_id: str | None = None
+    fact_id: str | None = None
+
+
+class ChatResponse(BaseModel):
+    answer: str
+    status: str
+    evidence: list[EvidenceCitationOut] = Field(default_factory=list)
+    conflicts: list[dict[str, Any]] = Field(default_factory=list)
+    missing_evidence: list[dict[str, Any]] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
+    conversation_id: uuid.UUID
+    message_id: uuid.UUID
+    retrieval_trace_id: uuid.UUID
+    query_class: str | None = None
+    extracted_ids: list[dict[str, Any]] = Field(default_factory=list)
+    retrieval_paths: list[str] = Field(default_factory=list)
+    guardrail_warnings: list[str] = Field(default_factory=list)
+
+
+class ConversationOut(BaseModel):
+    id: uuid.UUID
+    case_id: uuid.UUID
+    title: str | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ConversationMessageOut(BaseModel):
+    id: uuid.UUID
+    conversation_id: uuid.UUID
+    role: str
+    content: str
+    answer_status: str | None = None
+    retrieval_trace_id: uuid.UUID | None = None
+    answer_payload: dict[str, Any] | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class CaseMemoryOut(BaseModel):
+    id: uuid.UUID
+    case_id: uuid.UUID
+    version: int
+    key_facts_summary: list[Any] = Field(default_factory=list)
+    open_questions: list[Any] = Field(default_factory=list)
+    user_preferences: dict[str, Any] = Field(default_factory=dict)
+    last_reconciliation_snapshot_id: uuid.UUID | None = None
+    summary_text: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class FactConfirmRequest(BaseModel):
+    note: str | None = None
+
+
+class FactRejectRequest(BaseModel):
+    note: str | None = None
+    alternate_value: str | None = None
+
+
+class MemoryWritebackOut(BaseModel):
+    id: uuid.UUID
+    case_id: uuid.UUID
+    signal_type: str
+    fact_id: uuid.UUID | None
+    prior_state: str | None
+    new_state: str | None
+    note: str | None
+    review_decision_id: uuid.UUID | None = None
+    details: dict[str, Any] | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# --- Phase 5 ---
+
+
+class ReviewTaskOut(BaseModel):
+    id: uuid.UUID
+    task_id: str
+    case_id: uuid.UUID
+    task_type: str
+    severity: str
+    status: str
+    title: str
+    summary: str
+    source_kind: str
+    source_ref_id: str | None = None
+    fingerprint: str
+    related_fact_ids: list[Any] = Field(default_factory=list)
+    related_conflict_id: str | None = None
+    related_gap_id: str | None = None
+    details: dict[str, Any] | None = None
+    created_at: datetime
+    updated_at: datetime
+    resolved_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class ReviewDecisionOut(BaseModel):
+    id: uuid.UUID
+    decision_id: str
+    review_task_id: uuid.UUID
+    case_id: uuid.UUID
+    action: str
+    actor: str
+    reason: str | None = None
+    note: str | None = None
+    selected_fact_id: str | None = None
+    prior_states: dict[str, Any] | None = None
+    effects: dict[str, Any] | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ReviewDecisionRequest(BaseModel):
+    action: str = Field(
+        description="approve | reject | merge | split | request_docs | annotate"
+    )
+    reason: str | None = None
+    note: str | None = None
+    selected_fact_id: str | None = None
+    preferred_name: str | None = None
+    requested_doc_label: str | None = None
+
+
+class ReviewFlagRequest(BaseModel):
+    summary: str = Field(min_length=1, max_length=4000)
+    conversation_message_id: str | None = None
+    fact_id: str | None = None
+    severity: str = "MEDIUM"
+
+
+class AuditEventOut(BaseModel):
+    id: uuid.UUID
+    case_id: uuid.UUID | None
+    actor: str
+    action: str
+    resource_type: str
+    resource_id: str | None = None
+    details: dict[str, Any] | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ReviewDecisionResponse(BaseModel):
+    task: ReviewTaskOut
+    decision: ReviewDecisionOut
+

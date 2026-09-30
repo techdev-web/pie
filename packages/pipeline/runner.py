@@ -13,6 +13,7 @@ from packages.domain.models import Document, ProcessingJob, ProcessingStageRun
 from packages.observability import get_logger
 from packages.pipeline import stages
 from packages.pipeline import extraction as extraction_stage
+from packages.pipeline import indexing as indexing_stage
 
 log = get_logger("pipeline")
 
@@ -32,6 +33,13 @@ STAGE_SEQUENCE: list[tuple[str, str, str, str, StageFn]] = [
         "mock-or-gemini",
         "structured_extract:1",
         extraction_stage.stage_structured_extract,
+    ),
+    (
+        "index_embeddings",
+        "1",
+        "mock-or-gemini-embed",
+        "embed:1",
+        indexing_stage.stage_index_embeddings,
     ),
 ]
 
