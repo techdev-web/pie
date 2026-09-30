@@ -1,6 +1,6 @@
 # PIE — Property Intelligence Engine
 
-Due-diligence document intelligence (Phase 0 + Phase 1): multi-tenant cases, immutable document storage, durable jobs, and an evidence spine powered by Gemini (or MockProvider).
+Due-diligence document intelligence (Phase 0–2): multi-tenant cases, immutable document storage, durable jobs, evidence spine, and structured facts (owners, parcels, dates) with evidence citations.
 
 ## Quick start
 
@@ -45,7 +45,7 @@ arq apps.worker.main.WorkerSettings
 cd apps/web && npm install && npm run dev
 ```
 
-Open http://localhost:5173 — paste the API key, create a case, upload a PDF.
+Open http://localhost:5173 — paste the API key, create a case, upload a PDF. After the job succeeds, open **Why this fact?** to see cited evidence.
 
 ## Sample curl
 
@@ -62,20 +62,25 @@ curl -s -X POST http://localhost:8000/v1/cases \
 curl -s -X POST "http://localhost:8000/v1/cases/CASE_ID/documents/complete" \
   -H "X-API-Key: $PIE_KEY" \
   -F "file=@./sample.pdf" -F "role=primary"
+
+# facts (after job succeeds)
+curl -s "http://localhost:8000/v1/cases/CASE_ID/facts" -H "X-API-Key: $PIE_KEY"
+curl -s "http://localhost:8000/v1/cases/CASE_ID/facts/FACT_ID" -H "X-API-Key: $PIE_KEY"
 ```
 
-## Architecture (Phase 0–1)
+## Architecture (Phase 0–2)
 
-- **API** (`apps/api`): cases, uploads, jobs, evidence/pages
+- **API** (`apps/api`): cases, uploads, jobs, evidence/pages, facts
 - **Worker** (`apps/worker`): arq consumer running pipeline stages
-- **Pipeline**: `integrity → page_split → page_quality → classify → ocr → evidence_persist`
+- **Pipeline**: `integrity → page_split → page_quality → classify → ocr → evidence_persist → structured_extract`
 - **Storage**: MinIO (S3) or `STORAGE_BACKEND=fs`
 - **AI**: `GeminiProvider` when `GEMINI_API_KEY` is set; otherwise `MockProvider`
+- **Phase 2**: candidate facts → deterministic normalization → persons/parcels/ownership_events → facts linked to evidence
 
 ## Tests
 
 ```bash
-pytest tests/test_unit.py tests/test_idempotency.py -q
+pytest tests/test_unit.py tests/test_idempotency.py tests/test_phase2.py -q
 # with Compose up + migrated DB:
 pytest tests/test_api.py -q
 ```
@@ -85,3 +90,5 @@ pytest tests/test_api.py -q
 **Phase 0:** upload PDF → stored immutably → job succeeds; duplicate hash dedupes; cross-tenant denied.
 
 **Phase 1:** every page yields evidence rows; integrity warnings persisted; re-run OCR with same versions skips; UI shows page + evidence highlight.
+
+**Phase 2:** sale deed yields owner/buyer/seller/survey/area/date facts with evidence IDs; UI “Why this fact?” opens cited pages; no EXTRACTED fact without an evidence link (NOT_FOUND allowed without links).

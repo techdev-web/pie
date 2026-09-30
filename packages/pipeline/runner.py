@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from packages.domain.models import Document, ProcessingJob, ProcessingStageRun
 from packages.observability import get_logger
 from packages.pipeline import stages
+from packages.pipeline import extraction as extraction_stage
 
 log = get_logger("pipeline")
 
@@ -25,6 +26,13 @@ STAGE_SEQUENCE: list[tuple[str, str, str, str, StageFn]] = [
     ("classify", "1", "mock-or-gemini", "document_classify:1", stages.stage_classify),
     ("ocr", "1", "mock-or-gemini", "page_ocr:1", stages.stage_ocr),
     ("evidence_persist", "1", "", "", stages.stage_evidence_persist),
+    (
+        "structured_extract",
+        "1",
+        "mock-or-gemini",
+        "structured_extract:1",
+        extraction_stage.stage_structured_extract,
+    ),
 ]
 
 

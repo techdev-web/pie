@@ -7,6 +7,14 @@ import re
 from typing import Any
 
 from packages.ai.provider import ClassificationResult, PageExtractResult
+from packages.ai.schemas import (
+    CandidateFactPayload,
+    EncumbrancePayload,
+    OwnershipEventPayload,
+    ParcelPayload,
+    PersonPayload,
+    StructuredExtractResult,
+)
 from packages.config import Settings
 
 
@@ -24,6 +32,28 @@ OCR_PROMPT = """Extract all readable text from this document page image for land
 Return ONLY valid JSON with keys: text (string), confidence (0-1 float).
 Preserve identifiers (survey/gata/khata/registration numbers) exactly.
 Do not invent text that is not visible.
+"""
+
+STRUCTURED_EXTRACT_PROMPT = """You extract candidate facts for Indian land/title due diligence.
+Return ONLY valid JSON matching this schema:
+{{
+  "persons": [{{"name": str, "role": "seller|buyer|owner|donor|donee|other"|null, "aliases": [str], "identifiers": [{{"id_type": str, "id_value": str}}]}}],
+  "parcels": [{{"label": str|null, "identifiers": [{{"id_type": "gata|survey|khata|khasra|plot", "id_value": str}}], "area_raw": str|null, "village": str|null}}],
+  "ownership_events": [{{"event_type": "sale|gift|partition|mortgage|release|mutation|other", "event_date_raw": str|null, "registration_number": str|null, "consideration_raw": str|null, "seller_names": [str], "buyer_names": [str], "share_text": str|null}}],
+  "encumbrances": [{{"encumbrance_type": str, "status": str|null, "holder": str|null, "amount_raw": str|null, "page_number": int|null, "evidence_snippet": str|null, "confidence": float}}],
+  "facts": [{{"fact_type": str, "predicate": str, "value_text": str|null, "page_number": int|null, "evidence_snippet": str|null, "confidence": float, "verification_state": "EXTRACTED|AMBIGUOUS|NOT_FOUND|REQUIRES_REVIEW"}}]
+}}
+
+Rules:
+- Do not invent identifiers, dates, owners, or encumbrance status.
+- If a field is not present in the supplied evidence, use verification_state NOT_FOUND and leave value_text null.
+- Cite page_number and a short evidence_snippet from the supplied text for every EXTRACTED fact.
+- Prefer fact_type values: party.seller, party.buyer, party.owner, parcel.survey_number, parcel.area, transaction.date, transaction.registration_number, encumbrance.mortgage.
+
+Document type: {doc_type}
+Filename: {filename}
+Evidence pages:
+{evidence_text}
 """
 
 
@@ -136,3 +166,107 @@ class GeminiProvider:
             values = getattr(emb, "values", None) or []
             out.append(list(values))
         return out
+
+    def _parse_structured(self, data: dict[str, Any], *, model: str, usage: Any) -> StructuredExtractResult:
+        persons = [
+            PersonPayload(
+                name=str(p.get("name", "")).strip(),
+                role=p.get("role"),
+                aliases=list(p.get("aliases") or []),
+                identifiers=[
+                    {"id_type": str(i.get("id_type", "")), "id_value": str(i.get("id_value", ""))}
+                    for i in (p.get("identifiers") or [])
+                    if i.get("id_value")
+                ],
+            )
+            for p in (data.get("persons") or [])
+            if str(p.get("name", "")).strip()
+        ]
+        parcels = [
+            ParcelPayload(
+                label=pr.get("label"),
+                identifiers=[
+                    {"id_type": str(i.get("id_type", "survey")), "id_value": str(i.get("id_value", ""))}
+                    for i in (pr.get("identifiers") or [])
+                    if i.get("id_value")
+                ],
+                area_raw=pr.get("area_raw"),
+                village=pr.get("village"),
+            )
+            for pr in (data.get("parcels") or [])
+        ]
+        events = [
+            OwnershipEventPayload(
+                event_type=str(e.get("event_type") or "sale"),
+                event_date_raw=e.get("event_date_raw"),
+                registration_number=e.get("registration_number"),
+                consideration_raw=e.get("consideration_raw"),
+                seller_names=list(e.get("seller_names") or []),
+                buyer_names=list(e.get("buyer_names") or []),
+                share_text=e.get("share_text"),
+            )
+            for e in (data.get("ownership_events") or [])
+        ]
+        encumbrances = [
+            EncumbrancePayload(
+                encumbrance_type=str(enc.get("encumbrance_type") or "unknown"),
+                status=enc.get("status"),
+                holder=enc.get("holder"),
+                amount_raw=enc.get("amount_raw"),
+                page_number=enc.get("page_number"),
+                evidence_snippet=enc.get("evidence_snippet"),
+                confidence=float(enc.get("confidence", 0.5)),
+            )
+            for enc in (data.get("encumbrances") or [])
+        ]
+        facts = [
+            CandidateFactPayload(
+                fact_type=str(f.get("fact_type") or "unknown"),
+                predicate=str(f.get("predicate") or "value"),
+                value_text=f.get("value_text"),
+                page_number=f.get("page_number"),
+                evidence_snippet=f.get("evidence_snippet"),
+                confidence=float(f.get("confidence", 0.5)),
+                verification_state=str(f.get("verification_state") or "EXTRACTED"),
+            )
+            for f in (data.get("facts") or [])
+        ]
+        return StructuredExtractResult(
+            persons=persons,
+            parcels=parcels,
+            ownership_events=events,
+            encumbrances=encumbrances,
+            facts=facts,
+            model=model,
+            prompt_id="structured_extract",
+            prompt_version="1",
+            schema_version="extraction.v1",
+            temperature=0.0,
+            input_tokens=getattr(usage, "prompt_token_count", None) if usage else None,
+            output_tokens=getattr(usage, "candidates_token_count", None) if usage else None,
+        )
+
+    async def extract_structured(
+        self,
+        *,
+        doc_type: str,
+        filename: str | None,
+        evidence_pages: list[dict[str, Any]],
+    ) -> StructuredExtractResult:
+        evidence_text = "\n\n".join(
+            f"--- page {p.get('page_number')} ---\n{(p.get('text') or '')[:6000]}"
+            for p in evidence_pages
+        )[:24000]
+        prompt = STRUCTURED_EXTRACT_PROMPT.format(
+            doc_type=doc_type or "unknown",
+            filename=filename or "",
+            evidence_text=evidence_text or "(no evidence text)",
+        )
+        response = self.client.models.generate_content(
+            model=self.classify_model,
+            contents=prompt,
+            config={"temperature": 0.0},
+        )
+        data = self._parse_json(response.text or "{}")
+        usage = getattr(response, "usage_metadata", None)
+        return self._parse_structured(data, model=self.classify_model, usage=usage)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from packages.ai.schemas import StructuredExtractResult
 from packages.config import Settings, get_settings
 
 
@@ -49,6 +50,14 @@ class LLMProvider(Protocol):
         image_bytes: bytes | None,
         force_vision: bool = False,
     ) -> PageExtractResult: ...
+
+    async def extract_structured(
+        self,
+        *,
+        doc_type: str,
+        filename: str | None,
+        evidence_pages: list[dict[str, Any]],
+    ) -> StructuredExtractResult: ...
 
     async def embed(self, texts: list[str]) -> list[list[float]]: ...
 

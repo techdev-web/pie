@@ -41,6 +41,8 @@ export default function App() {
   const [pages, setPages] = useState([]);
   const [pageNum, setPageNum] = useState(1);
   const [evidence, setEvidence] = useState([]);
+  const [facts, setFacts] = useState([]);
+  const [whyFact, setWhyFact] = useState(null);
   const [job, setJob] = useState(null);
   const [title, setTitle] = useState("Sample title diligence");
   const [status, setStatus] = useState("");
@@ -74,18 +76,29 @@ export default function App() {
     setStatus(`Created case ${c.id}`);
   };
 
+  const loadFacts = useCallback(
+    async (caseId, docId) => {
+      const q = docId ? `?document_id=${docId}` : "";
+      const data = await api(`/v1/cases/${caseId}/facts${q}`, { apiKey });
+      setFacts(data);
+    },
+    [apiKey]
+  );
+
   const loadCase = useCallback(
     async (caseId) => {
       setError("");
       const detail = await api(`/v1/cases/${caseId}`, { apiKey });
       setCaseDetail(detail);
       setSelectedCase(caseId);
+      setWhyFact(null);
       if (detail.documents?.length) {
         setSelectedDoc(detail.documents[0].id);
       } else {
         setSelectedDoc(null);
         setPages([]);
         setEvidence([]);
+        setFacts([]);
       }
     },
     [apiKey]
@@ -121,13 +134,12 @@ export default function App() {
       setJob(j);
       if (j.status === "succeeded" || j.status === "failed") {
         setStatus(`Job ${j.status}`);
-        if (selectedCase && selectedDoc) {
-          await loadEvidence(selectedCase, selectedDoc);
-          await loadPages(selectedCase, selectedDoc);
-        } else if (selectedCase && j.document_id) {
-          setSelectedDoc(j.document_id);
-          await loadEvidence(selectedCase, j.document_id);
-          await loadPages(selectedCase, j.document_id);
+        const docId = selectedDoc || j.document_id;
+        if (selectedCase && docId) {
+          setSelectedDoc(docId);
+          await loadEvidence(selectedCase, docId);
+          await loadPages(selectedCase, docId);
+          await loadFacts(selectedCase, docId);
         }
         return;
       }
@@ -147,11 +159,22 @@ export default function App() {
     setEvidence(ev);
   };
 
+  const openWhy = async (fact) => {
+    if (!selectedCase) return;
+    setError("");
+    const detail = await api(`/v1/cases/${selectedCase}/facts/${fact.fact_id}`, { apiKey });
+    setWhyFact(detail);
+    if (detail.evidence?.length) {
+      setPageNum(detail.evidence[0].page_number);
+    }
+  };
+
   useEffect(() => {
     if (!selectedCase || !selectedDoc) return;
     loadPages(selectedCase, selectedDoc).catch(() => {});
     loadEvidence(selectedCase, selectedDoc).catch(() => {});
-  }, [selectedCase, selectedDoc, apiKey]);
+    loadFacts(selectedCase, selectedDoc).catch(() => {});
+  }, [selectedCase, selectedDoc, apiKey, loadFacts]);
 
   useEffect(() => {
     let objectUrl;
@@ -178,10 +201,12 @@ export default function App() {
     };
   }, [selectedCase, selectedDoc, pageNum, apiKey]);
 
-  const pageEvidence = useMemo(
-    () => evidence.filter((e) => e.page_number === pageNum),
-    [evidence, pageNum]
-  );
+  const pageEvidence = useMemo(() => {
+    if (whyFact?.evidence?.length) {
+      return whyFact.evidence.filter((e) => e.page_number === pageNum);
+    }
+    return evidence.filter((e) => e.page_number === pageNum);
+  }, [evidence, pageNum, whyFact]);
 
   const currentPage = pages.find((p) => p.page_number === pageNum);
 
@@ -189,11 +214,11 @@ export default function App() {
     <div className="app">
       <div className="brand">
         <h1>PIE</h1>
-        <span>Property Intelligence Engine — evidence viewer</span>
+        <span>Property Intelligence Engine — facts + evidence</span>
       </div>
       <p className="lede">
-        Upload title documents to a case, watch the evidence spine build, and inspect
-        page-level citations.
+        Upload title documents to a case, extract structured facts with evidence links, and ask
+        “Why this fact?” to jump to cited pages.
       </p>
 
       <div className="panel">
@@ -264,7 +289,10 @@ export default function App() {
                     <li
                       key={d.id}
                       className={d.id === selectedDoc ? "active" : ""}
-                      onClick={() => setSelectedDoc(d.id)}
+                      onClick={() => {
+                        setSelectedDoc(d.id);
+                        setWhyFact(null);
+                      }}
                     >
                       {d.source_filename || d.id}
                       <div className="status">
@@ -283,6 +311,74 @@ export default function App() {
                   </p>
                 )}
               </>
+            )}
+          </div>
+
+          <div className="panel">
+            <div className="row">
+              <h3 style={{ margin: 0, flex: 1 }}>Extracted facts</h3>
+              {whyFact && (
+                <button type="button" className="secondary" onClick={() => setWhyFact(null)}>
+                  Clear why
+                </button>
+              )}
+            </div>
+            {!facts.length && (
+              <p className="status">No facts yet. Upload a sale deed and wait for the job.</p>
+            )}
+            <ul className="list facts">
+              {facts.map((f) => (
+                <li
+                  key={f.fact_id}
+                  className={whyFact?.fact_id === f.fact_id ? "active" : ""}
+                >
+                  <div className="fact-row">
+                    <div>
+                      <span className="pill">{f.fact_type}</span>{" "}
+                      <span className="pill">{f.verification_state}</span>
+                      <div className="fact-value">
+                        <strong>{f.predicate}</strong>: {f.value_text || "—"}
+                        {f.value_normalized && f.value_normalized !== f.value_text ? (
+                          <span className="status"> → {f.value_normalized}</span>
+                        ) : null}
+                      </div>
+                      <div className="status">
+                        conf {(f.confidence ?? 0).toFixed(2)} · {f.evidence_count} evidence
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => openWhy(f).catch((e) => setError(e.message))}
+                    >
+                      Why this fact?
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            {whyFact && (
+              <div className="why-box">
+                <strong>Why: {whyFact.fact_id}</strong>
+                <p className="status">
+                  {whyFact.verification_state === "NOT_FOUND"
+                    ? "Not found in supplied documents (no invented value)."
+                    : `Cited ${whyFact.evidence?.length || 0} evidence item(s). Page viewer highlights the citation.`}
+                </p>
+                {(whyFact.evidence || []).map((ev) => (
+                  <div key={ev.evidence_id} className="why-ev">
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => setPageNum(ev.page_number)}
+                    >
+                      Page {ev.page_number}
+                    </button>{" "}
+                    <span className="pill">{ev.evidence_id}</span>
+                    <div>{ev.text.slice(0, 280)}{ev.text.length > 280 ? "…" : ""}</div>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
 

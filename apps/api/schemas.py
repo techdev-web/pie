@@ -102,3 +102,29 @@ class PageOut(BaseModel):
 
 class CaseDetailOut(CaseOut):
     documents: list[DocumentOut] = Field(default_factory=list)
+
+
+class FactOut(BaseModel):
+    id: uuid.UUID
+    fact_id: str
+    case_id: uuid.UUID
+    document_id: uuid.UUID | None
+    fact_type: str
+    subject_type: str | None
+    subject_id: uuid.UUID | None
+    predicate: str
+    value_text: str | None
+    value_normalized: str | None
+    value_json: dict[str, Any] | None
+    unit: str | None
+    verification_state: str
+    confidence: float | None
+    extraction_version: str
+    created_at: datetime
+    evidence_count: int = 0
+
+    model_config = {"from_attributes": True}
+
+
+class FactDetailOut(FactOut):
+    evidence: list[EvidenceOut] = Field(default_factory=list)

@@ -1,4 +1,4 @@
-"""FastAPI application for PIE Phase 0–1."""
+"""FastAPI application for PIE Phase 0–2."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from apps.api.routes import cases, documents, evidence, health, jobs
+from apps.api.routes import cases, documents, evidence, facts, health, jobs
 from packages.config import get_settings
 from packages.observability import configure_logging, get_logger
 
@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    app = FastAPI(title="PIE API", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="PIE API", version="0.2.0", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,
@@ -40,6 +40,7 @@ def create_app() -> FastAPI:
     app.include_router(documents.router, prefix="/v1")
     app.include_router(jobs.router, prefix="/v1")
     app.include_router(evidence.router, prefix="/v1")
+    app.include_router(facts.router, prefix="/v1")
     return app
 
 

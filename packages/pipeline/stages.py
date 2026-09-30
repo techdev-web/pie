@@ -1,4 +1,4 @@
-"""Pipeline stage implementations for Phase 1 evidence spine."""
+"""Pipeline stage implementations for Phase 1 evidence spine (+ helpers used by Phase 2)."""
 
 from __future__ import annotations
 

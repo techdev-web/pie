@@ -301,9 +301,9 @@ prompt_versions
 
 ### 2.4 Exit checklist
 
-- [ ] For a sale deed, PIE stores owner/buyer/seller/survey/area/date facts with evidence IDs.
-- [ ] UI: “Why this fact?” opens cited pages.
-- [ ] No fact exists without at least one evidence link (or explicit `NOT_FOUND` scoped to supplied docs).
+- [x] For a sale deed, PIE stores owner/buyer/seller/survey/area/date facts with evidence IDs.
+- [x] UI: “Why this fact?” opens cited pages.
+- [x] No fact exists without at least one evidence link (or explicit `NOT_FOUND` scoped to supplied docs).
 
 ------------------------------------------------------------------------
 
