@@ -175,3 +175,17 @@ async def run_document_pipeline(session: AsyncSession, job_id: uuid.UUID) -> Non
         job.finished_at = datetime.now(timezone.utc)
         await session.commit()
         raise
+
+
+async def run_document_pipeline_with_reconcile(
+    session: AsyncSession, job_id: uuid.UUID
+) -> uuid.UUID | None:
+    """Run document stages; return case_id so the worker can enqueue reconciliation."""
+    job = await session.get(ProcessingJob, job_id)
+    case_id = job.case_id if job else None
+    await run_document_pipeline(session, job_id)
+    # Re-check success
+    job = await session.get(ProcessingJob, job_id)
+    if job and job.status == "succeeded":
+        return case_id
+    return None

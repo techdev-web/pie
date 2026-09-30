@@ -11,6 +11,7 @@ from packages.ai.schemas import (
     OwnershipEventPayload,
     ParcelPayload,
     PersonPayload,
+    ReferencedDocumentPayload,
     StructuredExtractResult,
 )
 
@@ -101,14 +102,45 @@ class MockProvider:
                 model="mock",
             )
 
-        seller = "Ram Kumar" if "ram kumar" in combined else "Unknown Seller"
-        buyer = "Sita Devi" if "sita devi" in combined else "Unknown Buyer"
+        seller = "Ram Kumar" if "ram kumar" in combined else None
+        if seller is None:
+            if "lakshmi" in combined:
+                seller = "Lakshmi Devi"
+            elif "unknown seller" in combined:
+                seller = "Unknown Seller"
+            else:
+                # Pull a "Seller X" pattern if present
+                import re as _re
+
+                m = _re.search(r"seller\s+([A-Za-z][A-Za-z .]+?)(?:\s+buyer|\s+sale|\s+dated|$)", combined, _re.I)
+                seller = m.group(1).strip().title() if m else "Unknown Seller"
+        buyer = "Sita Devi" if "sita devi" in combined else None
+        if buyer is None:
+            if "ramesh" in combined:
+                buyer = "Ramesh Kumar"
+            else:
+                import re as _re
+
+                m = _re.search(r"buyer\s+([A-Za-z][A-Za-z .]+?)(?:\s+sale|\s+dated|\s+area|$)", combined, _re.I)
+                buyer = m.group(1).strip().title() if m else "Unknown Buyer"
         survey = "183/2" if "183/2" in combined else None
-        date_raw = "12/03/2020" if "12/03/2020" in combined or "12/03/2020" in combined else None
-        if "dated" in combined and not date_raw:
+        if survey is None and "184/1" in combined:
+            survey = "184/1"
+        date_raw = None
+        if "12/03/2020" in combined:
+            date_raw = "12/03/2020"
+        elif "15/06/2005" in combined:
+            date_raw = "15/06/2005"
+        elif "dated" in combined:
             date_raw = "12/03/2020"
         reg = "REG-1234" if "reg-1234" in combined else None
-        area = "0.5 acre" if "0.5 acre" in combined or "acre" in combined else None
+        if reg is None and "reg-2005" in combined:
+            reg = "REG-2005"
+        area = None
+        if "0.5 acre" in combined or ("acre" in combined and "0.5" in combined):
+            area = "0.5 acre"
+        elif "1.0 acre" in combined or "1 acre" in combined:
+            area = "1.0 acre"
 
         persons = [
             PersonPayload(name=seller, role="seller"),
@@ -240,11 +272,47 @@ class MockProvider:
                 )
             )
 
+        referenced: list[ReferencedDocumentPayload] = []
+        if "prior sale deed" in combined or "previous sale deed" in combined or "sale deed 2005" in combined:
+            year = "2005" if "2005" in combined else None
+            label = f"Sale Deed {year}" if year else "Prior sale deed"
+            referenced.append(
+                ReferencedDocumentPayload(
+                    label=label,
+                    doc_type="sale_deed",
+                    year=year,
+                    page_number=page_num,
+                    evidence_snippet=snippet,
+                    confidence=0.75,
+                )
+            )
+            facts.append(
+                CandidateFactPayload(
+                    fact_type="document.reference",
+                    predicate="references_instrument",
+                    value_text=label,
+                    page_number=page_num,
+                    evidence_snippet=snippet,
+                    confidence=0.75,
+                    attributes={"doc_type": "sale_deed", "year": year},
+                )
+            )
+        if "mutation" in combined and "mutation" not in (filename or "").lower():
+            referenced.append(
+                ReferencedDocumentPayload(
+                    label="Mutation",
+                    doc_type="mutation",
+                    page_number=page_num,
+                    evidence_snippet=snippet,
+                )
+            )
+
         return StructuredExtractResult(
             persons=persons,
             parcels=parcels,
             ownership_events=events,
             encumbrances=encumbrances,
+            referenced_documents=referenced,
             facts=facts,
             model="mock",
         )

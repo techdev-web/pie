@@ -13,6 +13,7 @@ from packages.ai.schemas import (
     OwnershipEventPayload,
     ParcelPayload,
     PersonPayload,
+    ReferencedDocumentPayload,
     StructuredExtractResult,
 )
 from packages.config import Settings
@@ -41,6 +42,7 @@ Return ONLY valid JSON matching this schema:
   "parcels": [{{"label": str|null, "identifiers": [{{"id_type": "gata|survey|khata|khasra|plot", "id_value": str}}], "area_raw": str|null, "village": str|null}}],
   "ownership_events": [{{"event_type": "sale|gift|partition|mortgage|release|mutation|other", "event_date_raw": str|null, "registration_number": str|null, "consideration_raw": str|null, "seller_names": [str], "buyer_names": [str], "share_text": str|null}}],
   "encumbrances": [{{"encumbrance_type": str, "status": str|null, "holder": str|null, "amount_raw": str|null, "page_number": int|null, "evidence_snippet": str|null, "confidence": float}}],
+  "referenced_documents": [{{"label": str, "doc_type": "sale_deed|mutation|encumbrance_certificate|release_deed|other"|null, "year": str|null, "page_number": int|null, "evidence_snippet": str|null, "confidence": float}}],
   "facts": [{{"fact_type": str, "predicate": str, "value_text": str|null, "page_number": int|null, "evidence_snippet": str|null, "confidence": float, "verification_state": "EXTRACTED|AMBIGUOUS|NOT_FOUND|REQUIRES_REVIEW"}}]
 }}
 
@@ -48,7 +50,8 @@ Rules:
 - Do not invent identifiers, dates, owners, or encumbrance status.
 - If a field is not present in the supplied evidence, use verification_state NOT_FOUND and leave value_text null.
 - Cite page_number and a short evidence_snippet from the supplied text for every EXTRACTED fact.
-- Prefer fact_type values: party.seller, party.buyer, party.owner, parcel.survey_number, parcel.area, transaction.date, transaction.registration_number, encumbrance.mortgage.
+- Prefer fact_type values: party.seller, party.buyer, party.owner, parcel.survey_number, parcel.area, transaction.date, transaction.registration_number, encumbrance.mortgage, document.reference.
+- When the document references a prior deed, mutation, EC, or release not itself, add referenced_documents and a document.reference fact.
 
 Document type: {doc_type}
 Filename: {filename}
@@ -219,6 +222,17 @@ class GeminiProvider:
             )
             for enc in (data.get("encumbrances") or [])
         ]
+        referenced = [
+            ReferencedDocumentPayload(
+                label=str(r.get("label") or "Referenced instrument"),
+                doc_type=r.get("doc_type"),
+                year=str(r["year"]) if r.get("year") is not None else None,
+                page_number=r.get("page_number"),
+                evidence_snippet=r.get("evidence_snippet"),
+                confidence=float(r.get("confidence", 0.6)),
+            )
+            for r in (data.get("referenced_documents") or [])
+        ]
         facts = [
             CandidateFactPayload(
                 fact_type=str(f.get("fact_type") or "unknown"),
@@ -228,14 +242,36 @@ class GeminiProvider:
                 evidence_snippet=f.get("evidence_snippet"),
                 confidence=float(f.get("confidence", 0.5)),
                 verification_state=str(f.get("verification_state") or "EXTRACTED"),
+                attributes=dict(f.get("attributes") or {}),
             )
             for f in (data.get("facts") or [])
         ]
+        # Ensure referenced docs also become facts if LLM only filled referenced_documents
+        existing_ref_labels = {
+            (f.value_text or "").lower()
+            for f in facts
+            if f.fact_type == "document.reference"
+        }
+        for ref in referenced:
+            if ref.label.lower() in existing_ref_labels:
+                continue
+            facts.append(
+                CandidateFactPayload(
+                    fact_type="document.reference",
+                    predicate="references_instrument",
+                    value_text=ref.label,
+                    page_number=ref.page_number,
+                    evidence_snippet=ref.evidence_snippet,
+                    confidence=ref.confidence,
+                    attributes={"doc_type": ref.doc_type, "year": ref.year},
+                )
+            )
         return StructuredExtractResult(
             persons=persons,
             parcels=parcels,
             ownership_events=events,
             encumbrances=encumbrances,
+            referenced_documents=referenced,
             facts=facts,
             model=model,
             prompt_id="structured_extract",

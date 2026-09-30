@@ -44,6 +44,7 @@ export default function App() {
   const [facts, setFacts] = useState([]);
   const [whyFact, setWhyFact] = useState(null);
   const [job, setJob] = useState(null);
+  const [intelligence, setIntelligence] = useState(null);
   const [title, setTitle] = useState("Sample title diligence");
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
@@ -85,6 +86,18 @@ export default function App() {
     [apiKey]
   );
 
+  const loadIntelligence = useCallback(
+    async (caseId) => {
+      try {
+        const data = await api(`/v1/cases/${caseId}/intelligence`, { apiKey });
+        setIntelligence(data);
+      } catch {
+        setIntelligence(null);
+      }
+    },
+    [apiKey]
+  );
+
   const loadCase = useCallback(
     async (caseId) => {
       setError("");
@@ -92,6 +105,7 @@ export default function App() {
       setCaseDetail(detail);
       setSelectedCase(caseId);
       setWhyFact(null);
+      await loadIntelligence(caseId);
       if (detail.documents?.length) {
         setSelectedDoc(detail.documents[0].id);
       } else {
@@ -99,9 +113,10 @@ export default function App() {
         setPages([]);
         setEvidence([]);
         setFacts([]);
+        setIntelligence(null);
       }
     },
-    [apiKey]
+    [apiKey, loadIntelligence]
   );
 
   useEffect(() => {
@@ -139,7 +154,15 @@ export default function App() {
           setSelectedDoc(docId);
           await loadEvidence(selectedCase, docId);
           await loadPages(selectedCase, docId);
-          await loadFacts(selectedCase, docId);
+          await loadFacts(selectedCase, null);
+        }
+        if (selectedCase && j.status === "succeeded") {
+          for (let k = 0; k < 10; k++) {
+            await new Promise((r) => setTimeout(r, 700));
+            const intel = await api(`/v1/cases/${selectedCase}/intelligence`, { apiKey });
+            setIntelligence(intel);
+            if (intel?.scorecard) break;
+          }
         }
         return;
       }
@@ -173,7 +196,7 @@ export default function App() {
     if (!selectedCase || !selectedDoc) return;
     loadPages(selectedCase, selectedDoc).catch(() => {});
     loadEvidence(selectedCase, selectedDoc).catch(() => {});
-    loadFacts(selectedCase, selectedDoc).catch(() => {});
+    loadFacts(selectedCase, null).catch(() => {});
   }, [selectedCase, selectedDoc, apiKey, loadFacts]);
 
   useEffect(() => {
@@ -214,11 +237,11 @@ export default function App() {
     <div className="app">
       <div className="brand">
         <h1>PIE</h1>
-        <span>Property Intelligence Engine — facts + evidence</span>
+        <span>Property Intelligence Engine — reconcile · conflicts · graphs</span>
       </div>
       <p className="lede">
-        Upload title documents to a case, extract structured facts with evidence links, and ask
-        “Why this fact?” to jump to cited pages.
+        Upload title documents to a case. PIE extracts facts with evidence, reconciles across
+        documents, and surfaces conflicts, missing instruments, and a completeness scorecard.
       </p>
 
       <div className="panel">
@@ -311,6 +334,110 @@ export default function App() {
                   </p>
                 )}
               </>
+            )}
+          </div>
+
+          <div className="panel">
+            <div className="row">
+              <h3 style={{ margin: 0, flex: 1 }}>Case intelligence</h3>
+              {selectedCase && (
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() =>
+                    api(`/v1/cases/${selectedCase}/reconcile?sync=true`, {
+                      apiKey,
+                      method: "POST",
+                    })
+                      .then(() => loadIntelligence(selectedCase))
+                      .then(() => loadFacts(selectedCase, null))
+                      .catch((e) => setError(e.message))
+                  }
+                >
+                  Reconcile now
+                </button>
+              )}
+            </div>
+            {!intelligence?.scorecard && (
+              <p className="status">
+                No scorecard yet. Upload documents and wait for reconciliation.
+              </p>
+            )}
+            {intelligence?.scorecard && (
+              <>
+                <div className="score-strip">
+                  <span className="pill warn">
+                    {intelligence.open_conflicts_count} open conflicts
+                  </span>
+                  <span className="pill">
+                    {intelligence.missing_evidence_count} missing evidence
+                  </span>
+                </div>
+                <div className="scorecard">
+                  {Object.entries(intelligence.scorecard.dimensions || {}).map(([k, v]) => (
+                    <div key={k} className="score-cell">
+                      <span className="score-key">{k.replace(/_/g, " ")}</span>
+                      <span className={`pill score-${String(v).toLowerCase()}`}>{v}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+            {!!intelligence?.conflicts?.length && (
+              <div className="intel-block">
+                <h4>Open conflicts</h4>
+                <ul className="list">
+                  {intelligence.conflicts.map((c) => (
+                    <li key={c.conflict_id}>
+                      <span className="pill danger">{c.conflict_type}</span>{" "}
+                      <span className="pill">{c.status}</span>
+                      <div className="fact-value">{c.summary}</div>
+                      <div className="status">
+                        {(c.facts || [])
+                          .map((f) => `${f.fact_type}=${f.value_text || f.value_normalized}`)
+                          .join(" · ")}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {!!intelligence?.missing_evidence?.length && (
+              <div className="intel-block">
+                <h4>Missing evidence</h4>
+                <ul className="list">
+                  {intelligence.missing_evidence.map((g) => (
+                    <li key={g.gap_id}>
+                      <span className="pill">{g.gap_type}</span>{" "}
+                      <span className="pill">{g.status}</span>
+                      <div className="fact-value">{g.referenced_label}</div>
+                      <div className="status">{g.summary}</div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {!!intelligence?.document_graph?.nodes?.length && (
+              <div className="intel-block">
+                <h4>Document graph</h4>
+                <ul className="list graph-list">
+                  {intelligence.document_graph.nodes.map((n) => (
+                    <li key={n.node_id}>
+                      <span className="pill">{n.status || n.node_type}</span> {n.label}
+                    </li>
+                  ))}
+                </ul>
+                {!!intelligence.document_graph.edges?.length && (
+                  <div className="status" style={{ marginTop: "0.5rem" }}>
+                    {intelligence.document_graph.edges.map((e) => (
+                      <div key={e.edge_id}>
+                        {e.from_node_id} —{e.edge_type}→ {e.to_node_id}{" "}
+                        <span className="pill">{e.status}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
           </div>
 

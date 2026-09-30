@@ -24,3 +24,12 @@ async def enqueue_process_document(job_id: uuid.UUID) -> None:
         log.info("enqueued", job_id=str(job_id))
     finally:
         await redis.aclose()
+
+
+async def enqueue_reconcile_case(case_id: uuid.UUID) -> None:
+    redis = await create_pool(_redis_settings())
+    try:
+        await redis.enqueue_job("reconcile_case", str(case_id))
+        log.info("enqueued_reconcile", case_id=str(case_id))
+    finally:
+        await redis.aclose()

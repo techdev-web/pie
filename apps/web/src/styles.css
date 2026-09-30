@@ -238,3 +238,74 @@ button:disabled {
   color: var(--muted);
   white-space: pre-wrap;
 }
+
+.score-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.5rem 0 0.75rem;
+}
+
+.scorecard {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.score-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.score-key {
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-transform: capitalize;
+}
+
+.pill.warn {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+  color: var(--accent);
+}
+
+.pill.danger {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--line));
+  color: var(--danger);
+}
+
+.pill.score-pass,
+.pill.score-good,
+.pill.score-provided {
+  color: #7dba8e;
+}
+
+.pill.score-warning,
+.pill.score-partial {
+  color: var(--accent);
+}
+
+.pill.score-incomplete,
+.pill.score-fail,
+.pill.score-not_provided {
+  color: var(--danger);
+}
+
+.intel-block {
+  margin-top: 0.85rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--line);
+}
+
+.intel-block h4 {
+  margin: 0 0 0.4rem;
+  font-size: 1rem;
+}
+
+.graph-list li {
+  cursor: default;
+}

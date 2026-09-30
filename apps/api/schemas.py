@@ -128,3 +128,92 @@ class FactOut(BaseModel):
 
 class FactDetailOut(FactOut):
     evidence: list[EvidenceOut] = Field(default_factory=list)
+
+
+class ConflictFactRef(BaseModel):
+    fact_id: str
+    document_id: uuid.UUID | None = None
+    fact_type: str
+    predicate: str
+    value_text: str | None = None
+    value_normalized: str | None = None
+    verification_state: str
+
+
+class ConflictOut(BaseModel):
+    id: uuid.UUID
+    conflict_id: str
+    case_id: uuid.UUID
+    conflict_type: str
+    severity: str
+    status: str
+    summary: str
+    details: dict[str, Any] | None = None
+    reconciliation_version: str
+    created_at: datetime
+    facts: list[ConflictFactRef] = Field(default_factory=list)
+
+    model_config = {"from_attributes": True}
+
+
+class MissingEvidenceOut(BaseModel):
+    id: uuid.UUID
+    gap_id: str
+    case_id: uuid.UUID
+    gap_type: str
+    referenced_from_document_id: uuid.UUID | None
+    referenced_label: str
+    required_doc_type: str | None
+    status: str
+    summary: str
+    details: dict[str, Any] | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class GraphNodeOut(BaseModel):
+    node_id: str
+    graph_type: str
+    node_type: str
+    label: str
+    status: str | None = None
+    ref_table: str | None = None
+    ref_id: uuid.UUID | None = None
+    properties: dict[str, Any] | None = None
+
+
+class GraphEdgeOut(BaseModel):
+    edge_id: str
+    graph_type: str
+    from_node_id: str
+    to_node_id: str
+    edge_type: str
+    status: str | None = None
+    properties: dict[str, Any] | None = None
+
+
+class GraphOut(BaseModel):
+    graph_type: str
+    nodes: list[GraphNodeOut] = Field(default_factory=list)
+    edges: list[GraphEdgeOut] = Field(default_factory=list)
+
+
+class CompletenessScorecardOut(BaseModel):
+    dimensions: dict[str, str]
+    open_conflicts_count: int
+    missing_evidence_count: int
+    case_fingerprint: str
+    reconciliation_version: str
+    created_at: datetime | None = None
+
+
+class CaseIntelligenceOut(BaseModel):
+    case_id: uuid.UUID
+    open_conflicts_count: int
+    missing_evidence_count: int
+    scorecard: CompletenessScorecardOut | None = None
+    conflicts: list[ConflictOut] = Field(default_factory=list)
+    missing_evidence: list[MissingEvidenceOut] = Field(default_factory=list)
+    document_graph: GraphOut | None = None
+    entity_event_graph: GraphOut | None = None

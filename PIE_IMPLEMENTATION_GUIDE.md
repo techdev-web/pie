@@ -372,9 +372,9 @@ Statuses: `PASS | WARNING | PARTIAL | INCOMPLETE | PROVIDED | GOOD | …`
 
 ### 3.5 Exit checklist
 
-- [ ] Two conflicting deeds produce an `OPEN` conflict, not a silent “winner.”
-- [ ] Document graph shows missing referenced instruments.
-- [ ] Case overview shows completeness scorecard + open conflicts count.
+- [x] Two conflicting deeds produce an `OPEN` conflict, not a silent “winner.”
+- [x] Document graph shows missing referenced instruments.
+- [x] Case overview shows completeness scorecard + open conflicts count.
 
 ------------------------------------------------------------------------
 

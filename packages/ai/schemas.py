@@ -59,16 +59,27 @@ class EncumbrancePayload:
 
 
 @dataclass
+class ReferencedDocumentPayload:
+    label: str
+    doc_type: str | None = None
+    year: str | None = None
+    page_number: int | None = None
+    evidence_snippet: str | None = None
+    confidence: float = 0.6
+
+
+@dataclass
 class StructuredExtractResult:
     persons: list[PersonPayload] = field(default_factory=list)
     parcels: list[ParcelPayload] = field(default_factory=list)
     ownership_events: list[OwnershipEventPayload] = field(default_factory=list)
     encumbrances: list[EncumbrancePayload] = field(default_factory=list)
+    referenced_documents: list[ReferencedDocumentPayload] = field(default_factory=list)
     facts: list[CandidateFactPayload] = field(default_factory=list)
     model: str = "mock"
     prompt_id: str = "structured_extract"
-    prompt_version: str = "1"
     schema_version: str = "extraction.v1"
+    prompt_version: str = "1"
     temperature: float = 0.0
     input_tokens: int | None = None
     output_tokens: int | None = None
