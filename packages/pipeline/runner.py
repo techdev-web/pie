@@ -8,10 +8,11 @@ from datetime import datetime, timezone
 from typing import Awaitable, Callable
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.config import get_settings
-from packages.domain.models import Document, ProcessingJob, ProcessingStageRun
+from packages.domain.models import Document, EvidenceItem, Fact, ProcessingJob, ProcessingStageRun
 from packages.observability import bind_pipeline_context, get_logger, pipeline_context
 from packages.pipeline import extraction as extraction_stage
 from packages.pipeline import indexing as indexing_stage
@@ -21,6 +22,16 @@ from packages.pipeline.versions import EVIDENCE_COMPLETE_STAGE, STAGE_VERSIONS
 log = get_logger("pipeline")
 
 StageFn = Callable[[AsyncSession, ProcessingJob, Document], Awaitable[None]]
+
+# These write case-scoped rows. Document-hash idempotency alone must not skip them
+# when the same PDF is linked into a second case.
+CASE_SCOPED_STAGES = frozenset(
+    {
+        "evidence_persist",
+        "structured_extract",
+        "index_embeddings",
+    }
+)
 
 _STAGE_FNS: dict[str, StageFn] = {
     "integrity": stages.stage_integrity,
@@ -71,6 +82,56 @@ async def _already_succeeded(
     return q.scalar_one_or_none()
 
 
+async def _case_outputs_ready(
+    session: AsyncSession,
+    *,
+    stage_name: str,
+    job: ProcessingJob,
+    document: Document,
+) -> bool:
+    """True when this case already has the case-scoped outputs for the stage."""
+    if job.case_id is None:
+        return False
+    if stage_name == "evidence_persist":
+        row = (
+            await session.execute(
+                select(EvidenceItem.id).where(
+                    EvidenceItem.document_id == document.id,
+                    EvidenceItem.case_id == job.case_id,
+                ).limit(1)
+            )
+        ).first()
+        return row is not None
+    if stage_name == "structured_extract":
+        row = (
+            await session.execute(
+                select(Fact.id).where(
+                    Fact.document_id == document.id,
+                    Fact.case_id == job.case_id,
+                ).limit(1)
+            )
+        ).first()
+        return row is not None
+    if stage_name == "index_embeddings":
+        # Re-index is cheap/idempotent; skip only if facts+evidence already present
+        # and a prior case_linked/succeeded run exists for this job's case via job join.
+        prior = (
+            await session.execute(
+                select(ProcessingStageRun.id)
+                .join(ProcessingJob, ProcessingJob.id == ProcessingStageRun.job_id)
+                .where(
+                    ProcessingStageRun.document_id == document.id,
+                    ProcessingStageRun.stage_name == stage_name,
+                    ProcessingJob.case_id == job.case_id,
+                    ProcessingStageRun.status.in_(("succeeded", "case_linked")),
+                )
+                .limit(1)
+            )
+        ).first()
+        return prior is not None
+    return False
+
+
 async def run_stage(
     session: AsyncSession,
     job: ProcessingJob,
@@ -89,7 +150,8 @@ async def run_stage(
         model_version=model_version,
         prompt_version=prompt_version,
     )
-    if existing is not None:
+    case_scoped = stage_name in CASE_SCOPED_STAGES
+    if existing is not None and not case_scoped:
         log.info(
             "stage_skipped",
             stage=stage_name,
@@ -97,6 +159,22 @@ async def run_stage(
             prior_run=str(existing.id),
         )
         return
+    if existing is not None and case_scoped:
+        if await _case_outputs_ready(session, stage_name=stage_name, job=job, document=document):
+            log.info(
+                "stage_skipped_case_ready",
+                stage=stage_name,
+                document_id=str(document.id),
+                case_id=str(job.case_id) if job.case_id else None,
+            )
+            return
+        log.info(
+            "stage_rerun_for_case",
+            stage=stage_name,
+            document_id=str(document.id),
+            case_id=str(job.case_id) if job.case_id else None,
+            prior_run=str(existing.id),
+        )
 
     run = ProcessingStageRun(
         id=uuid.uuid4(),
@@ -126,10 +204,32 @@ async def run_stage(
             model_version=model_version,
             prompt_version=prompt_version,
         )
-        if existing is not None:
+        if existing is not None and not case_scoped:
             log.info("stage_skipped_race", stage=stage_name, document_id=str(document.id))
             return
-        raise
+        if existing is not None and case_scoped:
+            if await _case_outputs_ready(session, stage_name=stage_name, job=job, document=document):
+                return
+            # Fall through: create a fresh run row after rollback
+            run = ProcessingStageRun(
+                id=uuid.uuid4(),
+                job_id=job.id,
+                tenant_id=job.tenant_id,
+                document_id=document.id,
+                document_hash=document.content_hash,
+                stage_name=stage_name,
+                stage_version=stage_version,
+                model_version=model_version,
+                prompt_version=prompt_version,
+                status="running",
+                skipped=False,
+                started_at=datetime.now(timezone.utc),
+            )
+            session.add(run)
+            run_id = run.id
+            await session.commit()
+        else:
+            raise
 
     timeout = get_settings().stage_timeout_seconds
     bind_pipeline_context(
@@ -144,10 +244,36 @@ async def run_stage(
         run = await session.get(ProcessingStageRun, run_id)
         if run is None:
             return
-        run.status = "succeeded"
+        # Only one "succeeded" row per document-hash stage key is allowed.
+        # Additional case materializations use case_linked.
+        doc_succeeded = await _already_succeeded(
+            session,
+            document_hash=document.content_hash,
+            stage_name=stage_name,
+            stage_version=stage_version,
+            model_version=model_version,
+            prompt_version=prompt_version,
+        )
+        if doc_succeeded is not None and doc_succeeded.id != run_id:
+            run.status = "case_linked"
+        else:
+            run.status = "succeeded"
         run.finished_at = datetime.now(timezone.utc)
-        await session.commit()
-        log.info("stage_succeeded", stage=stage_name, document_id=str(document.id))
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            run = await session.get(ProcessingStageRun, run_id)
+            if run is not None:
+                run.status = "case_linked"
+                run.finished_at = datetime.now(timezone.utc)
+                await session.commit()
+        log.info(
+            "stage_succeeded",
+            stage=stage_name,
+            document_id=str(document.id),
+            status=run.status if run else None,
+        )
     except Exception as exc:
         await session.rollback()
         run = await session.get(ProcessingStageRun, run_id)
