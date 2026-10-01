@@ -115,13 +115,12 @@ async def upload_document(
     storage = get_storage()
     key = document_storage_key(str(auth.tenant_id), content_hash)
 
-    # Dedup within tenant
+    # Dedup within tenant (stored or ready — same immutable bytes)
     existing = (
         await session.execute(
             select(Document).where(
                 Document.tenant_id == auth.tenant_id,
                 Document.content_hash == content_hash,
-                Document.upload_status == "stored",
             )
         )
     ).scalar_one_or_none()
@@ -211,12 +210,12 @@ async def upload_and_complete(
         raise HTTPException(status_code=400, detail="Empty file")
 
     content_hash = sha256_bytes(data)
+    # Match by hash only — status may be "stored" or "ready" after processing
     existing = (
         await session.execute(
             select(Document).where(
                 Document.tenant_id == auth.tenant_id,
                 Document.content_hash == content_hash,
-                Document.upload_status == "stored",
             )
         )
     ).scalar_one_or_none()

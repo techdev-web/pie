@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -712,6 +713,7 @@ async def run_case_reconciliation(
         started_at=datetime.now(timezone.utc),
     )
     session.add(run)
+    run_id = run.id
     try:
         await session.commit()
     except Exception:
@@ -738,16 +740,59 @@ async def run_case_reconciliation(
             documents=documents,
             fingerprint=fingerprint,
         )
-        run = await session.get(CaseStageRun, run.id)
+        run = await session.get(CaseStageRun, run_id)
         if run is not None:
+            # Worker + analyze can race; only one succeeded row is allowed.
+            winner = (
+                await session.execute(
+                    select(CaseStageRun).where(
+                        CaseStageRun.case_id == case_id,
+                        CaseStageRun.case_fingerprint == fingerprint,
+                        CaseStageRun.stage_name == STAGE_NAME,
+                        CaseStageRun.stage_version == STAGE_VERSION,
+                        CaseStageRun.status == "succeeded",
+                        CaseStageRun.id != run_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if winner is not None:
+                run.status = "superseded"
+                run.finished_at = datetime.now(timezone.utc)
+                await session.commit()
+                log.info(
+                    "reconcile_race_lost",
+                    case_id=str(case_id),
+                    fingerprint=fingerprint,
+                    winner=str(winner.id),
+                )
+                return {**result, "skipped": True, "fingerprint": fingerprint}
+
             run.status = "succeeded"
             run.finished_at = datetime.now(timezone.utc)
-            await session.commit()
-        log.info("reconcile_succeeded", case_id=str(case_id), **{k: v for k, v in result.items() if k != "dimensions"})
+            try:
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                run = await session.get(CaseStageRun, run_id)
+                if run is not None:
+                    run.status = "superseded"
+                    run.finished_at = datetime.now(timezone.utc)
+                    await session.commit()
+                log.info(
+                    "reconcile_race_lost",
+                    case_id=str(case_id),
+                    fingerprint=fingerprint,
+                )
+                return {**result, "skipped": True, "fingerprint": fingerprint}
+        log.info(
+            "reconcile_succeeded",
+            case_id=str(case_id),
+            **{k: v for k, v in result.items() if k != "dimensions"},
+        )
         return result
     except Exception as exc:
         await session.rollback()
-        run = await session.get(CaseStageRun, run.id)
+        run = await session.get(CaseStageRun, run_id)
         if run is not None:
             run.status = "failed"
             run.error_message = str(exc)[:2000]

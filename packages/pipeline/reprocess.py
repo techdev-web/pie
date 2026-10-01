@@ -49,7 +49,10 @@ async def documents_needing_delta(
         await session.execute(
             select(CaseDocument, Document)
             .join(Document, Document.id == CaseDocument.document_id)
-            .where(CaseDocument.case_id == case_id, Document.upload_status == "stored")
+            .where(
+                CaseDocument.case_id == case_id,
+                Document.upload_status.in_(("stored", "ready")),
+            )
         )
     ).all()
     stage_v, model_v, prompt_v = STAGE_VERSIONS["structured_extract"]
@@ -114,7 +117,7 @@ async def reprocess_case(
                 .join(CaseDocument, CaseDocument.document_id == Document.id)
                 .where(
                     CaseDocument.case_id == case_id,
-                    Document.upload_status == "stored",
+                    Document.upload_status.in_(("stored", "ready")),
                 )
             )
         ).scalars().all()

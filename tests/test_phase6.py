@@ -99,6 +99,8 @@ def _conflict(**kwargs):
 
 @pytest.mark.asyncio
 async def test_mortgage_without_release_is_unresolved_not_clear():
+    from packages.ai.mock_provider import MockProvider
+
     mortgage = _fact()
     gap = _gap()
     findings = build_legal_findings_layer1(
@@ -113,7 +115,7 @@ async def test_mortgage_without_release_is_unresolved_not_clear():
     assert "clear" not in enc.statement.lower() or "not clear" in enc.statement.lower()
     assert enc.details.get("clear_title_claimed") is False
 
-    layer2 = await enrich_findings_layer2(findings)
+    layer2 = await enrich_findings_layer2(findings, provider=MockProvider())
     enc2 = next(f for f in layer2 if f.category == "ENCUMBRANCE")
     assert enc2.status == "UNRESOLVED"
     assert enc2.details.get("title_clear") is False

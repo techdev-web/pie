@@ -25,11 +25,11 @@ class Settings(BaseSettings):
     fs_storage_path: str = "./data/storage"
 
     gemini_api_key: str = ""
-    gemini_classify_model: str = "gemini-2.0-flash"
-    gemini_ocr_model: str = "gemini-2.0-flash"
-    gemini_chat_model: str = "gemini-2.0-flash"
-    gemini_pro_model: str = "gemini-2.0-pro"
-    gemini_embed_model: str = "text-embedding-004"
+    gemini_classify_model: str = "gemini-2.5-flash"
+    gemini_ocr_model: str = "gemini-2.5-flash"
+    gemini_chat_model: str = "gemini-2.5-flash"
+    gemini_pro_model: str = "gemini-2.5-pro"
+    gemini_embed_model: str = "gemini-embedding-001"
 
     # USD per 1M tokens (input / output). Flash cheap; Pro costlier.
     gemini_flash_input_per_mtok: float = 0.10

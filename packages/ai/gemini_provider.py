@@ -110,12 +110,23 @@ class GeminiProvider:
                 return json.loads(match.group(0))
             raise
 
+    async def _generate_content(self, **kwargs: Any) -> Any:
+        """Run sync SDK call off the event loop (avoids blocking arq workers)."""
+        import asyncio
+
+        return await asyncio.to_thread(self.client.models.generate_content, **kwargs)
+
+    async def _embed_content(self, **kwargs: Any) -> Any:
+        import asyncio
+
+        return await asyncio.to_thread(self.client.models.embed_content, **kwargs)
+
     async def classify(self, *, filename: str | None, sample_text: str) -> ClassificationResult:
         prompt = CLASSIFY_PROMPT.format(
             filename=filename or "",
             sample_text=(sample_text or "")[:4000],
         )
-        response = self.client.models.generate_content(
+        response = await self._generate_content(
             model=self.classify_model,
             contents=prompt,
             config={"temperature": 0.0},
@@ -173,7 +184,7 @@ class GeminiProvider:
             types.Part.from_bytes(data=image_bytes, mime_type="image/png"),
             types.Part.from_text(text=ocr_prompt + f"\nPage number: {page_number}"),
         ]
-        response = self.client.models.generate_content(
+        response = await self._generate_content(
             model=self.ocr_model,
             contents=parts,
             config={"temperature": 0.0},
@@ -198,7 +209,7 @@ class GeminiProvider:
         # Phase 4 RAG embeddings via Gemini (normalize to 768-d for pgvector)
         from packages.retrieval.embeddings import pad_or_trim_vector
 
-        result = self.client.models.embed_content(
+        result = await self._embed_content(
             model=self.embed_model,
             contents=texts,
         )
@@ -244,7 +255,7 @@ class GeminiProvider:
         model = model_for_route(route, stage="chat", settings=self.settings) or self.chat_model
         if route == RouteEngine.PRO:
             model = self.pro_model
-        response = self.client.models.generate_content(
+        response = await self._generate_content(
             model=model,
             contents=prompt,
             config={"temperature": 0.0},
@@ -394,7 +405,7 @@ class GeminiProvider:
                 evidence_text=evidence_text or "(no evidence text)",
             )
         )
-        response = self.client.models.generate_content(
+        response = await self._generate_content(
             model=self.classify_model,
             contents=prompt,
             config={"temperature": 0.0},
@@ -414,7 +425,7 @@ class GeminiProvider:
             f"{LEGAL_LAYER2_PROMPT}\n\nLayer-1 findings:\n"
             f"{json.dumps(findings_payload, default=str)[:20000]}\n"
         )
-        response = self.client.models.generate_content(
+        response = await self._generate_content(
             model=model or self.pro_model,
             contents=prompt,
             config={"temperature": 0.0},

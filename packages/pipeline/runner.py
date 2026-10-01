@@ -113,6 +113,7 @@ async def run_stage(
         started_at=datetime.now(timezone.utc),
     )
     session.add(run)
+    run_id = run.id
     try:
         await session.commit()
     except Exception:
@@ -140,7 +141,7 @@ async def run_stage(
     )
     try:
         await asyncio.wait_for(fn(session, job, document), timeout=timeout)
-        run = await session.get(ProcessingStageRun, run.id)
+        run = await session.get(ProcessingStageRun, run_id)
         if run is None:
             return
         run.status = "succeeded"
@@ -149,7 +150,7 @@ async def run_stage(
         log.info("stage_succeeded", stage=stage_name, document_id=str(document.id))
     except Exception as exc:
         await session.rollback()
-        run = await session.get(ProcessingStageRun, run.id)
+        run = await session.get(ProcessingStageRun, run_id)
         if run is not None:
             run.status = "failed"
             msg = str(exc)
@@ -201,6 +202,7 @@ async def run_document_pipeline(session: AsyncSession, job_id: uuid.UUID) -> Non
                 succeeded.add(name)
             job.status = "succeeded"
             job.finished_at = datetime.now(timezone.utc)
+            document.upload_status = "ready"
             await session.commit()
             log.info("job_succeeded", job_id=str(job_id))
         except Exception as exc:
@@ -209,6 +211,7 @@ async def run_document_pipeline(session: AsyncSession, job_id: uuid.UUID) -> Non
                 job.status = "partial"
                 job.error_message = f"partial after evidence: {exc}"[:2000]
                 job.finished_at = datetime.now(timezone.utc)
+                document.upload_status = "ready"
                 await session.commit()
                 log.warning(
                     "job_partial",

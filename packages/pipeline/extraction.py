@@ -122,6 +122,11 @@ async def stage_structured_extract(
 ) -> None:
     """Gemini proposes candidates; code normalizes and persists with evidence links."""
     llm = get_llm_provider()
+    log.info(
+        "structured_extract_start",
+        document_id=str(document.id),
+        case_id=str(job.case_id) if job.case_id else None,
+    )
 
     evidence_items = list(
         (
